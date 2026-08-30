@@ -175,6 +175,7 @@ def main() -> None:
 
     history: list[dict] = []
     started = time.perf_counter()
+    first_step = state.step   # state.step は save のたびに進むので、開始点は別に持つ
     for step in range(state.step, args.steps):
         pairs = sampler.sample(args.batch_size)
         assert_no_leakage(pairs)
@@ -223,13 +224,15 @@ def main() -> None:
 
         if step % args.log_every == 0 or step == args.steps - 1:
             elapsed = time.perf_counter() - started
+            ms_per_step = elapsed / (step - first_step + 1) * 1000
             row = {"step": step, "lr": lr, "loss": float(out.loss),
                    "flow": float(out.flow_loss), "stop": float(out.stop_loss),
-                   "grad_norm": float(grad_norm), "elapsed": elapsed}
+                   "grad_norm": float(grad_norm), "elapsed": elapsed,
+                   "ms_per_step": ms_per_step}
             history.append(row)
             print(f"  step {step:5d}  loss={row['loss']:.4f} flow={row['flow']:.4f} "
                   f"stop={row['stop']:.4f} |g|={row['grad_norm']:.2f} lr={lr:.2e} "
-                  f"{elapsed/(step - state.step + 1)*1000:.0f} ms/step")
+                  f"{ms_per_step:.0f} ms/step")
 
         if args.save_every and (step + 1) % args.save_every == 0:
             state.step = step + 1
