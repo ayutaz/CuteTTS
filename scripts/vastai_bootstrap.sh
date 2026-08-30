@@ -39,7 +39,7 @@ echo "=== 3/5 Python依存 ==="
 python -c "import torch; assert torch.__version__.startswith('2.5.1')" 2>/dev/null || \
   pip install -q torch==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121
 pip install -q -e . 2>&1 | tail -2
-pip install -q pytest pyyaml huggingface_hub 2>&1 | tail -1
+pip install -q pytest pyyaml huggingface_hub accelerate 2>&1 | tail -1
 python - <<'PY'
 import torch
 print(f"  torch {torch.__version__}  cuda={torch.cuda.is_available()}")
