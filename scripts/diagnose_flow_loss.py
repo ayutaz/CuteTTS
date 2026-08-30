@@ -47,6 +47,7 @@ from cutetts.training.dataset import LatentSource
 from cutetts.training.forward import training_forward
 from cutetts.training.latents import LatentCacheReader
 from cutetts.training.manifest import load_manifest
+from cutetts.training.objectives import ConditionDropoutConfig
 from cutetts.training.pairing import PairSampler, assert_no_leakage
 from cutetts.training.prompt import build_voice_clone_prompt
 from cutetts.training.speaker_cache import SpeakerEmbeddingCacheReader
@@ -103,6 +104,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--group-key", default="voice_cluster_id")
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument("--label", default="post-train")
+    parser.add_argument("--train-mode", action="store_true",
+                        help="model.train() で評価する（学習ループと同条件にする）")
+    parser.add_argument("--condition-dropout", type=float, default=0.0,
+                        help="学習と同じ condition dropout を掛ける")
+    parser.add_argument("--advance-generator", action="store_true",
+                        help="generator を batch ごとに再seedせず、学習と同じく進める")
+    parser.add_argument("--splits", nargs="+",
+                        default=["train", "dev-seen", "dev-zero-shot"])
     parser.add_argument("--artifact-root", default="artifacts")
     parser.add_argument("--timestamp")
     return parser
@@ -115,7 +124,12 @@ def main() -> None:
     device = torch.device(args.device)
     run_dir = artifacts.new_run_dir("s0-diagnose", args.artifact_root, timestamp=args.timestamp)
 
-    model = load_model(Path(args.model_dir), device, args.dtype).eval()
+    model = load_model(Path(args.model_dir), device, args.dtype)
+    model.train() if args.train_mode else model.eval()
+    dropout = (ConditionDropoutConfig(speaker=args.condition_dropout,
+                                      reference=args.condition_dropout, joint=True)
+               if args.condition_dropout > 0 else None)
+    shared_generator = torch.Generator().manual_seed(args.seed) if args.advance_generator else None
 
     from cutetts.modeling.processor import CuteTTSProcessor
     from cutetts.modeling.segments import SegmentManagerConfig
@@ -137,7 +151,7 @@ def main() -> None:
 
     records = list(load_manifest(args.manifest))
     results: dict[str, dict] = {}
-    for split in ("train", "dev-seen", "dev-zero-shot"):
+    for split in args.splits:
         rows = [r for r in records
                 if r.split == split
                 and r.utterance_id in latent_reader and r.utterance_id in speaker_reader]
@@ -157,9 +171,11 @@ def main() -> None:
         flow, stop, zero_pred, n = [], [], [], 0
         with torch.no_grad():
             for batch, speaker in batches:
+                generator = (shared_generator if shared_generator is not None
+                             else torch.Generator().manual_seed(args.seed))
                 out = training_forward(model, batch, speaker_embeddings=speaker,
                                        flow_copies=args.flow_copies,
-                                       generator=torch.Generator().manual_seed(args.seed))
+                                       dropout=dropout, generator=generator)
                 flow.append(float(out.flow_loss))
                 stop.append(float(out.stop_loss))
                 clean = batch.target_patches.float()
