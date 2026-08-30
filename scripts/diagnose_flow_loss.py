@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from itertools import islice
 from pathlib import Path
 
 import torch
@@ -60,9 +61,12 @@ def build_batches(records, *, source, speaker_reader, processor, max_length,
     """train_continual.py と同じ手順で batch を作る。"""
     sampler = PairSampler(records, seed=seed, group_key=group_key,
                           min_utterances_per_group=2, target_reference_seconds=10.0)
+    # `sample()` は呼ぶたびに RNG を作り直すので、batch ごとに呼ぶと
+    # 全 batch が同じペアになる。stream を1本持って順に引く。
+    pair_stream = sampler.iter_pairs()
     out = []
     for _ in range(batches):
-        pairs = sampler.sample(batch_size)
+        pairs = list(islice(pair_stream, batch_size))
         assert_no_leakage(pairs)
         samples, speakers = [], []
         for pair in pairs:

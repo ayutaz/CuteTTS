@@ -34,6 +34,7 @@ import math
 import random
 import sys
 import time
+from itertools import islice
 from pathlib import Path
 
 import torch
@@ -161,6 +162,11 @@ def main() -> None:
     groups = sampler.eligible_groups()
     print(f"eligible groups ({args.group_key}): {len(groups)}")
 
+    # `sample()` は呼ぶたびに RNG を作り直すため、step ごとに呼ぶと
+    # 毎回まったく同じペアが返る（= 数発話だけを丸暗記する）。
+    # stream を1本持って、そこから順に引くこと。
+    pair_stream = sampler.iter_pairs()
+
     optimizer = torch.optim.AdamW(trainable, lr=args.lr, betas=(0.9, 0.95),
                                   weight_decay=args.weight_decay)
     state = TrainingState()
@@ -176,8 +182,11 @@ def main() -> None:
     history: list[dict] = []
     started = time.perf_counter()
     first_step = state.step   # state.step は save のたびに進むので、開始点は別に持つ
+    if first_step:
+        # resume 時は消費済みの分だけ stream を進めて、同じペアを繰り返さない
+        next(islice(pair_stream, first_step * args.batch_size, first_step * args.batch_size), None)
     for step in range(state.step, args.steps):
-        pairs = sampler.sample(args.batch_size)
+        pairs = list(islice(pair_stream, args.batch_size))
         assert_no_leakage(pairs)
 
         samples, speakers = [], []
