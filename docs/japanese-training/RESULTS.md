@@ -254,22 +254,33 @@ speaker slot と target の対応付けが壊れる。unpacked では両者が�
 **CPUだけのテストでは絶対に露見しない**種類の不具合で、
 vast.aiで実際に回したことで発見できた。
 
-## 参考: 未学習baseの日本語CER（S0の基準線）
+## S0 基準線: 未学習baseの日本語CER（確定）
 
-日本語未学習のbase checkpointが、既に理解可能な日本語を生成する。
+**確定値は [S0-GATE.md](S0-GATE.md) を参照。** 固定評価set（52文, version 2, seed 20260831）で測定。
+
+| subset | n | CER mean | median |
+|---|---:|---:|---:|
+| in_domain（gol会話文） | 30 | **35.8%** | 30.2% |
+| out_of_domain（数字・固有名詞） | 12 | 74.7% | 71.4% |
+| phonetic（音韻的難所） | 10 | 46.9% | 42.3% |
+
+主ゲート: **in_domain mean が 35.8% から有意に低下**（目安30%未満）。
+artifact: `artifacts/s0-cer/2026-08-30T15-59-54/`
+
+### 予備測定（12文、参考のみ）
+
+S0の固定評価set作成前に12文で測った値。標本が小さく、**ゲートには使わない**。
 
 | 区分 | n | CER mean | median |
 |---|---:|---:|---:|
-| in-domain（gol会話文） | 8 | **29.6%** | 20.9% |
-| out-of-domain（数字・固有名詞） | 4 | **77.2%** | 84.7% |
-| 全体 | 12 | 45.5% | 39.3% |
+| in-domain | 8 | 29.6% | 20.9% |
+| out-of-domain | 4 | 77.2% | 84.7% |
 
 例: `そうだ！貴官のことも教えていただけませんか？` → `そうだ本番のことも教えていただけませんか`（CER 10.0%）
 
-**out-of-domainがin-domainの2.6倍悪い**のは R-010（domain偏り）の定量的裏づけ。
-**S0のゲートは「日本語音声が出る」ではなく「このCERから測定可能に改善する」と具体化すべき。**
-
-（注: 12文の小標本。S0開始前に固定評価setで測り直すこと）
+**out-of-domainがin-domainの2倍以上悪い**のは R-010（domain偏り）の定量的裏づけ。
+日本語未学習のbase checkpointが既に理解可能な日本語を生成するため、
+**S0のゲートは「日本語音声が出る」ではなく「このCERから測定可能に改善する」**とした。
 
 ## artifact の所在
 
@@ -278,6 +289,7 @@ artifacts/p0/2026-08-30T15-26-33/          base（distill失敗時）
 artifacts/p0/2026-08-30T16-05-00-distill/  distill（triton導入後、gate_passed: true）
 artifacts/p1d/2026-08-30T16-35-00/         manifest + accepted hours
 artifacts/p1d-clusters/2026-08-30T17-05-00/ voiceクラスタ（t=0.92）
+artifacts/s0-cer/2026-08-30T15-59-54/     S0基準線CER（評価set v2、確定値）
 artifacts/p1e/2026-08-30T16-45-00-passA/   前処理パス Pass A
 artifacts/s0-memory/2026-08-30T14-56-42/   VRAM/throughput実測（vast.ai RTX 3090）
 ```
