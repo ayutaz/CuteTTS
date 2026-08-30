@@ -134,13 +134,16 @@ CLIにはこの計測がないため、streaming計測は `generate_stream()` �
 
 ### 進捗
 
-候補datasetは特定済み。実測値は [data-inventory.md](data-inventory.md) にある。
+候補datasetを特定し、`metadata.tsv` 全7,405,094行と `info.csv` 全473行を実測済み。
+詳細は [data-inventory.md](data-inventory.md)。
 
 - [midralab/gol-dataset](https://huggingface.co/datasets/midralab/gol-dataset):
-  10,654 h / 19,349話者 / 7,405,094発話 / 7,019 GB / 48 kHz mono 32bit /
-  visual novel domain。**license記載なし（未確定）**
+  10,654.32 h / 話者ID 19,349（実効 約2,000〜3,500）/ 7,405,094発話 / 7,019 GB /
+  48 kHz mono 32bit / **テキストはゲームスクリプト由来の正解** / visual novel domain。
+  **license記載なし（未確定）**
 - [ayousanz/moe-speech-plus](https://huggingface.co/datasets/ayousanz/moe-speech-plus):
-  152 GB / anime domain / speechMOS・2系統transcription・感情ラベル付き。
+  621.4 h / 473話者 / 395,170発話 / 152 GB / 44.1 kHz mono 16bit /
+  **テキストはASR（2系統）** / NISQA + VAD 品質フィルタ済み / anime domain。
   MoeSpeech LICENSE（著作権法30条の4、モデル公開は再配布に当たらないと明記）
 
 **残る最大の未確定はgol-datasetの利用条件。** 時間数の面ではS3の目標を単独で満たすため、
@@ -281,8 +284,9 @@ streaming decode経路（`vae.streaming_decode()`）でも同じ入力を通し�
 
 - [ ] JSONL schema（[03章](03-data-and-frontend.md) 第2節）が確定し、validatorが全recordを検証できる
 - [ ] `train / dev-seen / test-seen / dev-zero-shot / test-zero-shot / text-challenge /
-      vae-reconstruction` のsplitが生成され、zero-shot splitがspeaker-disjointであることを
-      テストで確認している
+      vae-reconstruction` のsplitが生成され、zero-shot splitが **voiceクラスタ単位で**
+      disjointであることをテストで確認している（speaker IDは声の識別子ではないため、
+      ID単位のdisjointでは不十分）
 - [ ] reference/target pairが同一utterance・同一録音の近重複を選ばないことをテストで確認している
 - [ ] 固定評価set（日本語challenge text、英語・中国語のforgetting用subset）が学習から除外されている
 - [ ] manifest versionとchecksumが記録され、小規模subsetを同じpipelineで再生成できる
@@ -298,9 +302,17 @@ streaming decode経路（`vae.streaming_decode()`）でも同じ入力を通し�
 
 ### 実データ由来の設計課題（[data-inventory.md](data-inventory.md)）
 
-- **speaker IDの粒度**: gol-datasetの `speaker` がgame横断で一意かが未確定。
-  game内でのみ一意なら、同一声優が別IDとしてtrain/zero-shot splitの両側に現れる。
-  `metadata.tsv` 取得後、最初にこれを判定する
+- **speaker IDが声の識別子でない（確認済み・最重要）**: gol-datasetの `speaker` は
+  `SHA-256(キャラクター表示名)[:32]`、moe-speech-plusは `uuid4().hex[:8]` のランダム値で
+  「同一声優でも別ID」とREADMEに明記。**どちらもspeaker-disjoint splitが
+  voice-actor-disjointを保証しない。** 対策として、frozenの公式Speaker Encoder
+  （`runtime.load_runtime()` が返す `speaker_encoder`、16 kHz → 256-dim）で
+  speaker IDごとの重心embeddingを作り、cosine類似度でvoiceクラスタへまとめ、
+  **splitをIDではなくvoiceクラスタ単位で行う**。総称ラベル（複数の声が1 IDに混在）も
+  クラスタ内分散で検出できる
+- **除外対象（実測値）**: テキストが空 1,055件 / 句読点・記号のみ 152,605件（2.06%）/
+  markup含み 3,766件（`%bd` は主人公名の変数でテキストと音声が不一致）/
+  総称ラベル話者 91件・47.4 h / 0-1秒の発話 4.39%
 - **reference長**: 発話の平均は5.18秒・中央値4.55秒だが、推論側の `prepare_reference_audio` は
   VAE用に先頭30秒を想定している。1発話をそのままreferenceにすると学習と推論が乖離するため、
   (A) 同一speakerの複数発話を連結 / (B) reference長を実分布に合わせ推論側の既定値も見直す /
