@@ -38,6 +38,19 @@ DIM = 64
 SPEAKER_DIM = 256
 
 
+def _prompt(n_text: int = 5, *, speaker: bool = True):
+    """テスト用の PromptLayout。text token を leading/trailing に分けて置く。"""
+    from cutetts.training.prompt import PromptLayout
+    lead = n_text // 2
+    trail = n_text - lead
+    return PromptLayout(
+        leading_ids=torch.arange(lead, dtype=torch.long),
+        middle_ids=torch.zeros(0, dtype=torch.long),
+        trailing_ids=torch.arange(20, 20 + trail, dtype=torch.long),
+        has_speaker_slot=speaker,
+    )
+
+
 def _tiny_model(seed: int = 0) -> CuteTTSModel:
     """公開configと同じ構造キーのまま、層数とhiddenだけ縮めたモデル。"""
     torch.manual_seed(seed)
@@ -69,10 +82,9 @@ def _batch(*, n_target: int = 5, n_reference: int = 3, seed: int = 0, uid: str =
     g = torch.Generator().manual_seed(seed)
     sample = build_training_sample(
         utterance_id=uid,
-        prefix_ids=torch.arange(6, dtype=torch.long),
+        prompt=_prompt(6),
         reference_latents=torch.randn(n_reference, PATCH, DIM, generator=g),
         target_latents=torch.randn(n_target, PATCH, DIM, generator=g),
-        speaker_slot=True,
     )
     speaker = torch.randn(1, SPEAKER_DIM, generator=g)
     return collate([sample]), speaker
@@ -194,13 +206,13 @@ def test_batch_of_two_runs_and_separates_targets():
     model = _tiny_model()
     g = torch.Generator().manual_seed(11)
     a = build_training_sample(
-        utterance_id="a", prefix_ids=torch.arange(5, dtype=torch.long),
+        utterance_id="a", prompt=_prompt(5),
         reference_latents=torch.randn(2, PATCH, DIM, generator=g),
-        target_latents=torch.randn(3, PATCH, DIM, generator=g), speaker_slot=True)
+        target_latents=torch.randn(3, PATCH, DIM, generator=g))
     b = build_training_sample(
-        utterance_id="b", prefix_ids=torch.arange(7, dtype=torch.long),
+        utterance_id="b", prompt=_prompt(7),
         reference_latents=torch.randn(3, PATCH, DIM, generator=g),
-        target_latents=torch.randn(4, PATCH, DIM, generator=g), speaker_slot=True)
+        target_latents=torch.randn(4, PATCH, DIM, generator=g))
     batch = collate([a, b])
     speaker = torch.randn(2, SPEAKER_DIM, generator=g)
     out = training_forward(model, batch, speaker_embeddings=speaker, flow_copies=1,

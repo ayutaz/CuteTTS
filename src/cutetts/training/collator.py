@@ -46,6 +46,7 @@ import torch
 from torch import Tensor
 
 from cutetts.training.objectives import build_stop_targets
+from cutetts.training.prompt import PromptLayout
 
 SPEECH_PLACEHOLDER_ID = 0
 """speech patch と speaker slot が占める位置に入れる token id。
@@ -92,13 +93,15 @@ class TrainingSample:
 def build_training_sample(
     *,
     utterance_id: str,
-    prefix_ids: Tensor,
+    prompt: PromptLayout,
     reference_latents: Tensor,
     target_latents: Tensor,
-    speaker_slot: bool = True,
     initial_previous_cond: Tensor | None = None,
 ) -> TrainingSample:
     """1発話ぶんの学習sampleを組み立てる。
+
+    ``prompt`` は `cutetts.training.prompt` が作る並び。**推論と同じ順序**で
+    leading / speaker slot / middle / reference speech / trailing を配置する。
 
     ``reference_latents`` と ``target_latents`` は **正規化後** の
     ``[n, patch, dim]`` を渡すこと（`cutetts.training.dataset.normalize_latents`）。
@@ -116,8 +119,6 @@ def build_training_sample(
             "reference and target patches must share [P, D]: "
             f"{tuple(reference_latents.shape[1:])} vs {tuple(target_latents.shape[1:])}"
         )
-    if prefix_ids.dim() != 1:
-        raise ValueError(f"prefix_ids must be 1-D, got {tuple(prefix_ids.shape)}")
 
     n_target = int(target_latents.shape[0])
     n_reference = int(reference_latents.shape[0])
@@ -128,7 +129,11 @@ def build_training_sample(
     fed = target_latents[: n_target - 1]
     n_fed = int(fed.shape[0])
 
-    prefix_len = int(prefix_ids.shape[0]) + (1 if speaker_slot else 0) + n_reference
+    lead = int(prompt.leading_ids.shape[0])
+    mid = int(prompt.middle_ids.shape[0])
+    trail = int(prompt.trailing_ids.shape[0])
+    slot = 1 if prompt.has_speaker_slot else 0
+    prefix_len = lead + slot + mid + n_reference + trail
     total_len = prefix_len + n_fed
 
     input_ids = torch.full((total_len,), SPEECH_PLACEHOLDER_ID, dtype=torch.long, device=device)
@@ -136,23 +141,27 @@ def build_training_sample(
     speaker_mask = torch.zeros(total_len, dtype=torch.bool, device=device)
 
     cursor = 0
-    if speaker_slot:
+    if lead:
+        input_ids[cursor : cursor + lead] = prompt.leading_ids.to(device)
+        cursor += lead
+    if slot:
         speaker_mask[cursor] = True
         cursor += 1
+    if mid:
+        input_ids[cursor : cursor + mid] = prompt.middle_ids.to(device)
+        cursor += mid
     if n_reference:
         speech_mask[cursor : cursor + n_reference] = True
         cursor += n_reference
-    text_len = int(prefix_ids.shape[0])
-    input_ids[cursor : cursor + text_len] = prefix_ids.to(device=device, dtype=torch.long)
-    cursor += text_len
+    if trail:
+        input_ids[cursor : cursor + trail] = prompt.trailing_ids.to(device)
+        cursor += trail
     assert cursor == prefix_len
     if n_fed:
         speech_mask[cursor : cursor + n_fed] = True
 
     speech_latents = (
-        torch.cat([reference_latents, fed], dim=0)
-        if n_reference
-        else fed
+        torch.cat([reference_latents, fed], dim=0) if n_reference else fed
     )
     if speech_latents.shape[0] == 0:
         speech_latents = target_latents.new_zeros((0, patch, dim))

@@ -42,15 +42,27 @@ PATCH = 2
 DIM = 64
 
 
+def _prompt(n_text: int = 5, *, speaker: bool = True):
+    """テスト用の PromptLayout。text token を leading/trailing に分けて置く。"""
+    from cutetts.training.prompt import PromptLayout
+    lead = n_text // 2
+    trail = n_text - lead
+    return PromptLayout(
+        leading_ids=torch.arange(lead, dtype=torch.long),
+        middle_ids=torch.zeros(0, dtype=torch.long),
+        trailing_ids=torch.arange(20, 20 + trail, dtype=torch.long),
+        has_speaker_slot=speaker,
+    )
+
+
 def _sample(*, n_target: int = 4, n_reference: int = 3, n_text: int = 5,
             speaker_slot: bool = True, uid: str = "u0", seed: int = 0) -> TrainingSample:
     g = torch.Generator().manual_seed(seed)
     return build_training_sample(
         utterance_id=uid,
-        prefix_ids=torch.arange(n_text, dtype=torch.long),
+        prompt=_prompt(n_text, speaker=speaker_slot),
         reference_latents=torch.randn(n_reference, PATCH, DIM, generator=g),
         target_latents=torch.randn(n_target, PATCH, DIM, generator=g),
-        speaker_slot=speaker_slot,
     )
 
 
@@ -102,10 +114,10 @@ def test_initial_previous_cond_can_be_supplied_from_the_prefix():
     initial = torch.randn(PATCH, DIM, generator=g)
     s = build_training_sample(
         utterance_id="u",
-        prefix_ids=torch.arange(3, dtype=torch.long),
+        prompt=_prompt(3),
         reference_latents=torch.randn(2, PATCH, DIM, generator=g),
         target_latents=torch.randn(3, PATCH, DIM, generator=g),
-        speaker_slot=True,
+        
         initial_previous_cond=initial,
     )
     assert torch.equal(s.previous_cond[0], initial)
@@ -140,10 +152,9 @@ def test_empty_target_is_rejected():
     with pytest.raises(ValueError):
         build_training_sample(
             utterance_id="u",
-            prefix_ids=torch.arange(3, dtype=torch.long),
+            prompt=_prompt(3),
             reference_latents=torch.zeros(2, PATCH, DIM),
             target_latents=torch.zeros(0, PATCH, DIM),
-            speaker_slot=True,
         )
 
 
@@ -151,10 +162,9 @@ def test_patch_shape_mismatch_is_rejected():
     with pytest.raises(ValueError):
         build_training_sample(
             utterance_id="u",
-            prefix_ids=torch.arange(3, dtype=torch.long),
+            prompt=_prompt(3),
             reference_latents=torch.zeros(2, PATCH, DIM),
             target_latents=torch.zeros(3, PATCH + 1, DIM),
-            speaker_slot=True,
         )
 
 

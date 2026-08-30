@@ -28,17 +28,16 @@ from cutetts.training.collator import build_training_sample, collate
 from cutetts.training.forward import training_forward
 from cutetts.training.packing import pack_samples, packed_attention_mask
 
-from .test_forward import DIM, PATCH, SPEAKER_DIM, _tiny_model
+from .test_forward import DIM, PATCH, SPEAKER_DIM, _prompt, _tiny_model
 
 
 def _sample(uid: str, *, n_target: int, n_reference: int, n_text: int, seed: int):
     g = torch.Generator().manual_seed(seed)
     return build_training_sample(
         utterance_id=uid,
-        prefix_ids=torch.arange(n_text, dtype=torch.long),
+        prompt=_prompt(n_text),
         reference_latents=torch.randn(n_reference, PATCH, DIM, generator=g),
         target_latents=torch.randn(n_target, PATCH, DIM, generator=g),
-        speaker_slot=True,
     )
 
 
