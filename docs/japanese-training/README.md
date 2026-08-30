@@ -53,7 +53,8 @@
 5. [段階的な実験ロードマップ](05-experiment-roadmap.md)
 6. [評価計画](06-evaluation-plan.md)
 7. [リスク、意思決定、未解決事項](07-risks-and-decisions.md)
-8. [一次資料](references.md)
+8. [対応計画（実行フェーズ定義）](08-execution-plan.md)
+9. [一次資料](references.md)
 
 ## 現時点の要約
 
