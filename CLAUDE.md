@@ -137,7 +137,7 @@ LMのtoken rateは `12.5 / 2 = 6.25 patch/s`。`--max-decode-length 750` は約1
 
 ### 進捗（2026-08-30）
 
-**P0 と P1 は完了。次は P2（学習forward復元）。**
+**P0 / P1 / P2 は完了。次は S0（10〜30時間 overfit、GPU必要）。**
 
 | フェーズ | 状態 | 主要な結論 |
 |---|---|---|
@@ -152,12 +152,15 @@ LMのtoken rateは `12.5 / 2 = 6.25 patch/s`。`--max-decode-length 750` は約1
 ### 実装済み
 
 ```text
-src/cutetts/training/   artifacts, manifest, text_rules, pairing,
-                        latents, speaker_cache, voice_clusters
+src/cutetts/training/   P1: artifacts, manifest, text_rules, pairing,
+                            latents, speaker_cache, voice_clusters
+                        P2: objectives, collator, dataset, forward,
+                            packing, checkpointing
 scripts/                reproduce_baseline, analyze_japanese_tokenizer,
                         evaluate_japanese_vae, prepare_japanese_manifest,
                         cache_audio_latents, build_voice_clusters
-tests/training/         354件 PASS
+tools/                  mutation_check（テストが実際に効くかの検証）
+tests/training/         全件PASS（slowマーカーは実checkpointを要する）
 ```
 
 実行手順は `.claude/skills/cutetts-ja-pipeline/SKILL.md` にまとめてある。
@@ -172,11 +175,17 @@ tests/training/         354件 PASS
 - **話者IDを匿名化として扱わない**。golのIDは `SHA-256(表示名)[:32]` で辞書攻撃可能。
 - 重いGPU処理は vast.ai へ回す（D-024）。起動前に費用見積もりを提示する。
 
-### P2で自分で決める必要がある箇所（04章）
+### P2で自分で決めた事項（決定済み。変更するなら理由を残す）
 
-論文にもコードにも規定がない: padding patchのloss除外、packed境界のstop label、
-stop lossのclass imbalance対策、flow lossとstop lossの重み、condition dropoutの範囲。
-推論側の停止挙動と一致するテストが必須。
+| 項目 | 決定 |
+|---|---|
+| padding patchのloss除外 | 分子からも分母からも除く |
+| stopラベルの位置 | 位置iのhiddenが「patch iが最終patchか」。`STOP_STOP=1` 固定 |
+| stopのclass imbalance | `positive_weight`（重み付き平均） |
+| flow/stopの重み | `stop_weight=1.0` 既定。Stage 0で調整 |
+| condition dropoutの対象 | speaker + reference、既定はjoint |
 
-一方、**推論コードから確定できる仕様**は08章P2の表にまとめてある（正規化後の潜在空間、
-stopラベルの位置、headのシグネチャ、previous condの初期値）。推測で決めないこと。
+**packingを触るときの注意**: 行index（`target_batch_index`）と
+sample index（`target_sample_index`）は別物。unpackedでは一致するので
+混同しても露見しない。packingすると1行に複数sampleが入り、speaker の
+対応付けが壊れる。

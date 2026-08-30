@@ -167,6 +167,53 @@ t=0.70では77話者中62が1クラスタへ併合された。
 
 **Pass BはS2直前まで実施しない**（voiceクラスタ閾値の再較正が先）。
 
+## P2: 学習forward復元 — ゴール7件すべて達成
+
+実装は `src/cutetts/training/`（objectives / collator / dataset / forward /
+packing / checkpointing）。**すべてCPUで検証**（縮小した実CuteTTSModelを使用）。
+
+| ゴール | 結果 |
+|---|---|
+| deterministic tiny batchでlossが再現 | 完全一致 |
+| 学習対象moduleにだけgradient | 6module全てに到達。freezeで停止 |
+| 1 utteranceのoverfit | flow lossが30%以上低下 |
+| save/resume後の次stepが一致 | 完全一致（RNG未復元だと不一致になることも確認） |
+| packingがunpackedの結果を変えない | loss一致、hidden stateも個別実行と一致 |
+| 推論pathでcheckpointをload | `runtime.load_runtime` で確認 |
+| 配線を外すとテストが落ちる | 変異テスト **9/9 検出**、packing境界で3件失敗 |
+
+### 変異テストの結果（`tools/mutation_check.py`）
+
+| 変異 | 検出 |
+|---|---|
+| stopラベルを1つ手前へ | 4件失敗 |
+| velocity符号反転 | 2件失敗 |
+| 補間のt反転 | 2件失敗 |
+| joint dropout無効化 | 1件失敗 |
+| flow lossのmask無視 | 2件失敗 |
+| stopのpadding除外を無効化 | 2件失敗 |
+| STOP_STOPを0にする | 2件失敗 |
+| copiesを無視して1固定 | 2件失敗 |
+| speaker dropout無効化 | 1件失敗 |
+
+### 自分で決めた事項
+
+論文にもコードにも規定が無い項目（04章）への回答。
+
+| 項目 | 決定 |
+|---|---|
+| padding patchのloss除外 | 分子からも分母からも除く |
+| stopラベルの位置 | 位置iのhiddenが「patch iが最終patchか」。`STOP_STOP=1` 固定 |
+| stopのclass imbalance | `positive_weight`（重み付き平均） |
+| flow/stopの重み | `stop_weight=1.0` 既定。Stage 0で調整 |
+| condition dropoutの対象 | speaker + reference、既定はjoint |
+
+### packing で見つかった実バグ
+
+行index と sample index の混同。packingすると1行に複数sampleが入るため
+speaker slot と target の対応付けが壊れる。unpacked では両者が一致するので
+**packingを書くまで露見しなかった**。
+
 ## 参考: 未学習baseの日本語CER（S0の基準線）
 
 日本語未学習のbase checkpointが、既に理解可能な日本語を生成する。

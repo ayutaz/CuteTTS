@@ -25,17 +25,17 @@
 | P1c | Audio VAE 日本語再構成 | 公式VAEをfreezeしたまま進めてよいか | **完了**（CER差 +0.58pt → freeze確定） |
 | P1d | Manifest / split / pairing | 再現可能なデータ入口があるか | **完了**（voiceクラスタ t=0.92、leakage 0） |
 | P1e | 前処理パス | 全音声1パスでlatentとspeaker embeddingを作れるか | **Pass A完了**（Pass BはS2直前） |
-| P2 | 学習forward復元 | 公開moduleから正しい学習stepを構成できるか | **次はここ** |
-| S0 | 10〜30h overfit | 日本語がそもそも学習できるか | 未着手（P2待ち） |
+| P2 | 学習forward復元 | 公開moduleから正しい学習stepを構成できるか | **完了**（ゴール7件すべて達成） |
+| S0 | 10〜30h overfit | 日本語がそもそも学習できるか | **次はここ**（GPU必要） |
 | S1 | 100〜500h PoC | 日本語品質とzero-shot cloningが成立するか | 未着手 |
 | S2 | 1,000h | 分布を広げても安定するか（v0.1候補） | 未着手 |
 | S3 | 3,000〜10,000h | 最終baseモデルを作れるか | 未着手 |
 | S4 | Japanese Audio VAE | VAEがボトルネックの場合のみ実施 | **見送り**（P1cで根拠なし・D-010） |
 | S5 | Guidance-step distillation | 日本語baseを高速化できるか | 未着手 |
 
-**2026-08-30時点で P0 と P1 は完了。次に着手すべきは P2（学習forward復元）です。**
-P2はCPUのみで実装まで進められます。GPUが必要になるのはP2の検証（tiny batch）と
-S0の学習からで、**ローカルGPUを使う処理は実行前に必ずユーザーへ確認すること**。
+**2026-08-30時点で P0 / P1 / P2 は完了。次に着手すべきは S0（10〜30時間 overfit）です。**
+P2はすべてCPUで検証した（縮小した実CuteTTSModelを使用）。
+**S0からはGPUが必要**で、ローカルGPUは使わず vast.ai を使う（D-023 / D-024）。
 
 実行に使うコマンドは `docs/japanese-training/RESULTS.md` と
 `.claude/skills/cutetts-ja-pipeline/SKILL.md` にまとまっています。
@@ -522,7 +522,49 @@ P2側ではcacheのload側だけを扱います。
 推論専用の公開moduleから、最小のteacher-forced training stepを構成する。
 このフェーズの誤りは以降すべてのStageを無効にするため、**品質ではなく正しさ**だけを扱う。
 
-### 状態: 未着手。P1完了により前提はすべて揃っている（2026-08-30）
+### 状態: 完了（2026-08-30）。ゴール7件すべて達成
+
+実装（`src/cutetts/training/`）:
+
+| module | 役割 |
+|---|---|
+| `objectives.py` | flow matching / stop / condition dropout |
+| `collator.py` | teacher forcing の sequence 組み立て |
+| `dataset.py` | latent cache の読み出しと正規化 |
+| `forward.py` | 学習forward本体、`freeze_all_but` |
+| `packing.py` | segment境界を遮断する packing |
+| `checkpointing.py` | save/resume（RNG含む）と推論用export |
+
+検証結果（すべてCPU、`tests/training` 全件PASS）:
+
+| ゴール | 結果 |
+|---|---|
+| deterministic tiny batchでlossが再現 | ✓ |
+| 学習対象moduleにだけgradientが流れる | ✓ 6module全てに到達、freezeで停止 |
+| 1 utteranceをoverfitできる | ✓ flow lossが30%以上低下 |
+| save/resume後の次stepが一致 | ✓ 完全一致。RNG未復元だと不一致になることも確認 |
+| packingがunpackedの結果を変えない | ✓ loss一致、hidden stateも個別実行と一致 |
+| 推論pathでcheckpointをloadできる | ✓ `runtime.load_runtime` で確認 |
+| 配線を外すとテストが落ちる | ✓ 変異テスト9/9検出、packing境界で3件失敗 |
+
+#### packing で見つかった実バグ
+
+行index と sample index の混同。packingすると1行に複数sampleが入るため
+speaker slot と target の対応付けが壊れる。unpackedでは両者が一致するので
+packingを書くまで露見しなかった。`target_batch_index`（行）と
+`target_sample_index`（sample）を分離して解決。
+
+#### 自分で決めた事項（04章「規定が無い箇所」への回答）
+
+| 項目 | 決定 |
+|---|---|
+| padding patchのloss除外 | 分子からも分母からも除く |
+| stopラベルの位置 | 位置iのhiddenが「patch iが最終patchか」。STOP_STOP=1固定 |
+| stopのclass imbalance | `positive_weight`（重み付き平均） |
+| flow/stopの重み | `stop_weight=1.0` 既定。Stage 0で調整 |
+| condition dropoutの対象 | speaker + reference、既定はjoint |
+
+#### 旧: 着手時に揃っていた前提
 
 **すぐ使える資産**
 
