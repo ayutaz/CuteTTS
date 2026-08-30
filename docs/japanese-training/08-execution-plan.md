@@ -23,8 +23,9 @@
 | P1a | データ実態調査 | 実際に学習へ投入できるデータは何時間・何話者か | データ所在の把握 | P0と並行可 |
 | P1b | Tokenizer coverage | 公式Tokenizerは日本語を表現できるか | P0 | P1cと並行可 |
 | P1c | Audio VAE 日本語再構成 | 公式VAEをfreezeしたまま進めてよいか | P0 + 日本語音声 | P1bと並行可 |
-| P1d | Manifest / split / pairing | 再現可能なデータ入口があるか | P1a | — |
-| P2 | 学習forward復元 | 公開moduleから正しい学習stepを構成できるか | P0, P1d | — |
+| P1d | Manifest / split / pairing | 再現可能なデータ入口があるか | P1a, P1e | — |
+| P1e | 前処理パス | 全音声1パスでlatentとspeaker embeddingを作れるか | P0 | — |
+| P2 | 学習forward復元 | 公開moduleから正しい学習stepを構成できるか | P0, P1d, P1e | — |
 | S0 | 10〜30h overfit | 日本語がそもそも学習できるか | P1b, P1c, P2 | — |
 | S1 | 100〜500h PoC | 日本語品質とzero-shot cloningが成立するか | S0 | — |
 | S2 | 1,000h | 分布を広げても安定するか（v0.1候補） | S1 | — |
@@ -32,8 +33,9 @@
 | S4 | Japanese Audio VAE | VAEがボトルネックの場合のみ実施 | 条件付き | — |
 | S5 | Guidance-step distillation | 日本語baseを高速化できるか | S3 | — |
 
-**最初に着手すべきはP0とP1a。** P1aはコードを1行も書かずに進められ、かつ以降すべてのフェーズの
-規模・スケジュール・公開可否がここに依存するため、遅らせるほど手戻りが大きくなります。
+**2026-08-30時点でP1aは実質完了。次に着手すべきはP0です。**
+P0の最初の作業であるcheckpoint取得が、P1b（Tokenizer）・P1c（VAE）・P1e（前処理パス）
+すべての前提になっており、**現在の唯一のボトルネック**です。
 
 ## 共通ルール（提案）
 
@@ -132,51 +134,55 @@ CLIにはこの計測がないため、streaming計測は `generate_stream()` �
 
 「約10,000時間」を、権利・品質・話者分布が判明した **投入可能な時間数** に置き換える。
 
-### 進捗
+### 状態: 実質完了（2026-08-30）
 
 候補datasetを特定し、`metadata.tsv` 全7,405,094行と `info.csv` 全473行を実測済み。
-詳細は [data-inventory.md](data-inventory.md)。
+利用条件はユーザー確認により解決（D-014）。詳細は [data-inventory.md](data-inventory.md)。
 
 - [midralab/gol-dataset](https://huggingface.co/datasets/midralab/gol-dataset):
   10,654.32 h / 話者ID 19,349（実効 約2,000〜3,500）/ 7,405,094発話 / 7,019 GB /
-  48 kHz mono 32bit / **テキストはゲームスクリプト由来の正解** / visual novel domain。
-  **license記載なし（未確定）**
+  48 kHz mono 32bit / **テキストはゲームスクリプト由来の正解** / visual novel domain
 - [ayousanz/moe-speech-plus](https://huggingface.co/datasets/ayousanz/moe-speech-plus):
   621.4 h / 473話者 / 395,170発話 / 152 GB / 44.1 kHz mono 16bit /
   **テキストはASR（2系統）** / NISQA + VAD 品質フィルタ済み / anime domain。
   MoeSpeech LICENSE（著作権法30条の4、モデル公開は再配布に当たらないと明記）
 
-**残る最大の未確定はgol-datasetの利用条件。** 時間数の面ではS3の目標を単独で満たすため、
-ここが確定しない限りS1以降の規模計画が立ちません。
+**S3の目標時間はgol-dataset単独で満たせます。** 規模はもうボトルネックではありません。
 
 ### ゴール
 
-- [ ] dataset単位の棚卸し表が存在し、各行に次が埋まっている
-      `dataset_id / 取得元 / 総時間 / 話者数 / transcript有無と取得方法 / sample rate /
-      license / 学習利用可否 / 生成物の再配布可否 / voice cloning利用の同意状況`
-- [ ] 「raw hours」と「学習に使ってよいaccepted hours（見込み）」が分離して集計されている
-- [ ] S0（10〜30h）、S1（100〜500h）、S2（1,000h）に投入する候補datasetが指名されている
-- [ ] 権利が不明なdatasetが、学習対象から明示的に除外されている
-- [ ] checkpointを公開するか内部利用に限定するかの方針が仮決定されている
+- [x] dataset単位の棚卸し表が存在する
+- [x] S0（10〜30h）、S1（100〜500h）、S2（1,000h）に投入する候補datasetが指名されている（D-017）
+- [x] 権利の確認が完了している（D-014）
+- [ ] 「raw hours」と「accepted hours」が分離して集計されている
+      — **除外条件は確定済み**（下表）だが、実適用はP1dのvalidator実行後
+- [ ] checkpointを公開するか内部利用に限定するかの方針が仮決定されている（R-009の残件）
 
-### 作業
+### 確定した除外条件（実測値つき・D-016）
 
-コード不要。[03-data-and-frontend.md](03-data-and-frontend.md) 第8節（10,000時間の使い方）と
-[07-risks-and-decisions.md](07-risks-and-decisions.md) の未解決事項「データ」に回答を埋める。
+| 条件 | gol-datasetでの実測 |
+|---|---:|
+| テキストが空 | 1,055件 |
+| テキストが句読点・記号のみ（`…………` 等） | 152,605件（2.06%） |
+| markupを含む（`%bd` は主人公名の変数で音声と不一致） | 3,766件（0.05%） |
+| 総称ラベル話者（`？？？`『女の子』『店員』等 91件） | 47.4 h |
+| 0〜1秒の発話 | 4.39% |
+| 話者あたり総時間が短くpairを作れない | 中央値36秒、81.5%が0.25 h未満 |
 
-### 成果物
+ルビmarkup `<rかな>…</r>`（2,547件）は除去せず**読み情報として保持する**選択肢がある（提案・未検証）。
 
-- `docs/japanese-training/data-inventory.md`（新規・提案）
+### 残作業
+
+- 除外条件をvalidatorへ実装し、accepted hoursを確定する（P1dへ引き継ぎ）
+- モデル公開範囲の決定（R-009。S3のmodel card作成までに必要）
 
 ### 判断ゲート
 
-- R-006（時間数優先の回避）: 高品質subsetの実在を確認する
-- R-009（権利）: public/privateの境界をここで先に決める。後から決めると学習をやり直す可能性がある
-
-### 注意
-
-このフェーズの結果次第で、以降のStageの時間数（10〜30h / 100〜500h / 1,000h / 10,000h）自体が
-変わります。**S3が成立しないと分かった場合、S0〜S2の設計も見直します。**
+- D-013 / D-014 / D-017: 確定
+- R-006（時間数優先の回避）: moe-speech-plusが話者あたり最小14.3分とspeechMOSを持ち、
+  高品質subsetの実在を確認済み
+- R-009（権利）: データ利用可否はクローズ。public/privateの境界は未確定
+- R-010（domain偏り）: 新規に認識。目標の言い直しの要否が未確定
 
 ---
 
@@ -333,6 +339,76 @@ streaming decode経路（`vae.streaming_decode()`）でも同じ入力を通し�
 
 ---
 
+## P1e: 前処理パス（speaker embedding + latent cache）
+
+### 目的
+
+P1dのvoiceクラスタリングとP2のlatent cacheは、**どちらも全音声を1回ずつ読む**必要があります。
+別々に実施すると7 TBのI/Oを2回払うため、**1回のストリーミングパスで両方を生成**します。
+
+### 設計（提案）
+
+tar 1本ごとに完結させ、元音声をローカルに常駐させません。
+
+```text
+for each tar (602本):
+    download tar
+    for each wav:
+        24 kHz mono へ変換（gol 48k は 2:1、moe 44.1k は 147:80）
+        ├─ Audio VAE encoder  → latent [T, 64] を fp16 で cache へ
+        └─ Speaker Encoder    → 256-dim embedding を cache へ
+    tar を破棄
+```
+
+Speaker Encoderは16 kHz入力、Audio VAEは24 kHz入力なので、**リサンプルは2系統必要**です
+（`prepare_reference_audio` が推論で行っているのと同じ構成）。
+
+### 容量（確認済みの計算）
+
+| 表現 | 1秒あたり | gol全体（10,654 h） |
+|---|---:|---:|
+| 元音声（48 kHz / 32 bit） | 192,000 B | 7,019 GB |
+| 24 kHz / 16 bit へ変換後 | 48,000 B | 1,755 GB |
+| **VAE latent（12.5 Hz × 64 dim, fp16）** | **1,600 B** | **61 GB** |
+| speaker embedding（256 dim fp32、発話あたり1 kB） | — | 7.4 GB |
+
+**cache生成後は学習時に元音声が不要**になります。
+
+### 段階実行（提案）
+
+全602 tarを一度に処理せず、2段階に分けます。
+
+| パス | 対象 | 用途 | 規模 |
+|---|---|---|---|
+| **Pass A** | moe-speech-plus 全体 + gol-dataset の数十tar | P1c、P1d設計、S0、S1 | 152 GB + 数百 GB |
+| **Pass B** | gol-dataset 全体 | S2、S3 | 7,019 GB |
+
+Pass Aで手順とcache形式を固めてからPass Bを流します。
+Pass Bを走らせる前に、Pass Aの実測からI/O時間とGPU時間を見積もります。
+
+### ゴール
+
+- [ ] Pass Aが完了し、latent cacheとspeaker embedding cacheが生成されている
+- [ ] cacheに VAE checkpoint revision / preprocessing version / source checksum が記録され、
+      不一致のcacheをloadすると例外になる
+- [ ] 同じwaveformから2回生成したlatentが一致する
+- [ ] 1 tarあたりの所要時間（download / resample / encode）が実測され、
+      Pass Bの総時間が見積もれている
+- [ ] 元音声をローカルに常駐させずに完走できることが確認されている
+
+### 成果物
+
+- `src/cutetts/training/latents.py`, `src/cutetts/training/speaker_cache.py`
+- `scripts/cache_audio_latents.py`
+- `tests/training/test_latents.py`
+
+### 注意
+
+このフェーズはP2 Task 1と成果物が重なります。**P2 Task 1はここへ統合**し、
+P2側ではcacheのload側だけを扱います。
+
+---
+
 ## P2: 学習forward復元
 
 ### 目的
@@ -378,15 +454,12 @@ flow lossとstop lossの重み、condition dropoutが落とす条件の範囲。
 各タスクは「失敗するテストを書く → 失敗を確認 → 最小実装 → 成功を確認 → commit」で進めます。
 テストは `tests/training/` に置きます（P1dで `.gitignore` の `tests/` 除外を解除済みであること）。
 
-**Task 1: latent cache**
-- Create: `src/cutetts/training/latents.py`, `scripts/cache_audio_latents.py`
-- Test: `tests/training/test_latents.py`
-- 検証: 同じwaveformから2回生成したlatentが一致する / cacheにVAE checkpoint revisionと
-  preprocessing versionが記録され、不一致のcacheをloadすると例外になる
-- 規模の根拠（[data-inventory.md](data-inventory.md)）: gol-dataset 10,654時間ぶんのlatentは
-  fp16で約61 GB（元音声は7,019 GB）。**cache生成後は学習時に元音声が不要**になる。
-  ローカルに7 TBを常駐させないよう、tar単位で「取得 → 24 kHz変換 → encode → cache書き出し →
-  音声破棄」のストリーミング処理にする（提案）
+**Task 1: latent cacheのload**（生成側はP1eへ統合済み）
+- Create: `src/cutetts/training/dataset.py`
+- Test: `tests/training/test_dataset.py`
+- 検証: cacheから読んだlatentがVAE encode結果と一致する / VAE revisionや
+  preprocessing versionが不一致のcacheをloadすると例外になる /
+  manifestのutterance_idとcacheの対応が壊れていると検出される
 
 **Task 2: reference/target pairing（学習用samplerへの拡張）**
 - Modify: `src/cutetts/training/pairing.py`（P1dで作成済み）
@@ -559,51 +632,65 @@ GAN discriminator・multi-resolution mel・WavLM teacherを含むため、TTS本
 
 ## 依存関係
 
+2026-08-30時点。P1aは完了（取り消し線）。
+
 ```text
-P0 ──┬── P1b ──┐
-     └── P1c ──┤
-               ├── S0 ── S1 ── S2 ── S3 ── S5
-P1a ── P1d ── P2┘                │
-                                 └── S4（条件付き・S1〜S3の失敗分析から分岐）
+             ┌── P1b ──────────────┐
+P0（weight）─┼── P1c ──────────────┤
+             └── P1e（Pass A）─ P1d ─ P2 ─┬─ S0 ─ S1 ─ S2 ─ S3 ─ S5
+                                          │       │
+        ~~P1a~~（完了）───────────────────┘       └── S4（条件付き）
+
+P1e（Pass B, gol全体）────────────────────────────── S2 以降で必要
 ```
 
-- P0とP1aは同時着手できる（P1aはコード不要）
-- P1bとP1cは互いに独立で、どちらもTTS本体のloadを必要としない
-- P2はP1d（manifest）に依存する。データが無いと学習sampleを組み立てられない
+- **P0のweight取得が全体のボトルネック。** P1b（Tokenizer）はtokenizerディレクトリを、
+  P1c（VAE）はAudio VAE weightを、P1e（前処理）はVAEとSpeaker Encoderのweightを必要とする
+- P1bとP1cは互いに独立
+- P1dのvoiceクラスタリングはP1eのspeaker embeddingを消費する。順序はP1e → P1d
+- P1e Pass BはS2の直前までに完了していればよく、S0/S1と並行して流せる
 - S0はP1b・P1c・P2の3つが揃って初めて意味を持つ
 
 ## 決定ゲート一覧
 
-| 決定 | 確定するフェーズ | 決めるのに必要な材料 |
-|---|---|---|
-| Tokenizer方針（維持/拡張/reading追加） | P1b | coverage report |
-| Audio VAEをfreezeで進めるか | P1c | reconstruction metric + 聴取 |
-| 公開範囲（public checkpoint / 内部利用） | P1a | license・consentの棚卸し |
-| stop target / loss weightの仕様 | P2 | 推論の停止挙動と一致するテスト |
-| Patch Encoder train / freeze | S0 | 小規模ablation |
-| full fine-tuning / 部分freeze / LoRA | S0 | VRAM実測と安定性 |
-| 日本語/replay比率 | S1 | forgetting測定 |
-| reading/G2P追加の要否 | S1 | 読み誤りの内訳 |
-| GPU規模（4090 1台 / H100 8台 等） | S0の実測後、S2着手前 | microbatch benchmark、throughput |
-| Japanese VAEの要否 | P1cで仮決定、S1〜S3で確定 | VAEがボトルネックである証拠 |
+| 決定 | 状態 | 確定するフェーズ | 決めるのに必要な材料 |
+|---|---|---|---|
+| 使用するdataset（D-013） | **確定** | P1a | 実測済み |
+| データ利用条件（D-014） | **確定** | P1a | ユーザー確認 |
+| S0〜S3のdataset割り当て（D-017） | 提案 | P1a | 実測済み。S0開始時に再確認 |
+| 除外条件（D-016） | 提案 | P1d | 実測済み。validator実行で確定 |
+| split単位＝voiceクラスタ（D-015） | 提案 | P1d | クラスタリング結果 |
+| Tokenizer方針（維持/拡張/reading追加） | 未確定 | P1b | coverage report |
+| Audio VAEをfreezeで進めるか | 未確定 | P1c | reconstruction metric + 聴取 |
+| reference長の扱い（A/B/C） | 未確定 | P1d | 発話長分布（実測済み）と評価設計 |
+| stop target / loss weightの仕様 | 未確定 | P2 | 推論の停止挙動と一致するテスト |
+| Patch Encoder train / freeze | 未確定 | S0 | 小規模ablation |
+| full fine-tuning / 部分freeze / LoRA | 未確定 | S0 | VRAM実測と安定性 |
+| 日本語/replay比率 | 未確定 | S1 | forgetting測定 |
+| reading/G2P追加の要否 | 未確定 | S1 | 読み誤りの内訳 |
+| GPU規模（4090 1台 / H100 8台 等） | 未確定 | S0の実測後、S2着手前 | microbatch benchmark、throughput |
+| Japanese VAEの要否 | 未確定 | P1cで仮決定、S1〜S3で確定 | VAEがボトルネックである証拠 |
+| **モデル公開範囲**（R-009残件） | 未確定 | S3まで | 公開/内部利用の方針 |
+| **目標の言い直しの要否**（R-010） | 未確定 | S1まで | domain偏りの影響度 |
 
 ## 着手前に回答が必要な事項
 
-以下はコードでは決められず、この計画の規模そのものを変えます。
+以下はコードでは決められず、この計画の規模そのものを変えます。2026-08-30時点。
 
-1. ~~**日本語データは現時点で手元にあるか。**~~ 解決。gol-dataset（10,654 h）と
-   moe-speech-plus（152 GB）を特定済み。[data-inventory.md](data-inventory.md) 参照。
-   **ただしgol-datasetのlicenseが未記載** であり、これがS1以降の規模を決める最大の未確定事項。
-2. **checkpointを公開するか、内部利用に限定するか。** 公開する場合、voice cloningの提供条件と
-   データ側の再配布可否がP1aの必須項目になる。MoeSpeech LICENSEはモデル公開を許容するが、
-   gol-dataset側は未確定。
-3. **日本語専用性能を最優先するか、既存5言語の能力を残すか。** replay data確保の要否が変わる。
-4. **利用可能なGPU。** 現時点で使える機材（開発機・クラウド）が、S0の実施可否を直接決める。
-   あわせて、latent cache生成（7 TBのI/O）を実行できるストレージと帯域も必要。
+1. ~~**日本語データは現時点で手元にあるか。**~~ **解決。** gol-dataset（10,654 h）と
+   moe-speech-plus（621 h）を実測済み（D-013）。利用条件も解決済み（D-014）。
+2. **利用可能なGPUとストレージ。**（最優先の未回答）
+   S0の実施可否を直接決めるほか、P1eの前処理パスに次が必要:
+   - Pass A: 数百 GBの一時領域 + latent cache 数 GB
+   - Pass B: gol全体 7 TBのdownload帯域（音声は都度破棄するため常駐は不要）+ cache 61 GB
+   - GPU: VAE encoderとSpeaker Encoderを7.4M発話へ適用するGPU時間（Pass Aで実測する）
+3. **checkpointを公開するか、内部利用に限定するか。** MoeSpeech LICENSEはモデル公開を
+   明示的に許容している。S3のmodel card作成までに確定させる（R-009残件）。
+4. **日本語専用性能を最優先するか、既存5言語の能力を残すか。** replay data確保の要否が変わる。
 5. **日本語母語話者による主観評価の実施体制。** S1以降のexit gateに聴取評価が含まれる。
 6. **目標を「日本語TTS一般」から「日本語の表現的な多話者TTS」へ言い直すか。**
-   利用可能な両datasetがanime / visual novel domainに偏っており、中立的な朗読音声を
-   ほぼ含まない。別途データを足すか、目標を実データに合わせるかの判断が要る。
+   両datasetがanime / visual novel domainに偏っており、gol-datasetで数字を含む発話は
+   0.11%しかない（R-010）。中立朗読データを足すか、目標を実データに合わせるかの判断が要る。
 
 ## 関連資料
 

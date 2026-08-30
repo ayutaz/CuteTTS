@@ -22,16 +22,16 @@
 - forkをローカルへclone済み
 - `main` から `feat/japanese-training` ブランチを作成済み
 - 先行会話、ローカル実装、公式README、論文v2、公開checkpoint構成を調査済み
-- 日本語データ候補の特定（gol-dataset 10,654 h、moe-speech-plus 152 GB）。
+- 日本語データの確定（gol-dataset 10,654 h / moe-speech-plus 621 h）と利用条件の解決。
   実測値は [データ棚卸し](data-inventory.md) を参照
 
 ### 未実施
 
-- 公式checkpointのローカル推論ベースライン
+- 公式checkpointのローカル推論ベースライン（**現在のボトルネック**。weight取得が
+  Tokenizer調査・VAE評価・前処理パスすべての前提）
 - 公式Tokenizerの日本語coverage測定
 - 公式Audio VAEによる日本語再構成評価
 - 日本語metadataの実データ検証
-- gol-datasetの利用条件の確定（license記載がなく、S1以降の規模を左右する）
 - 学習用forward、loss、packing、trainerの実装
 - 日本語のoverfit test、PoC、継続学習
 - 日本語モデルの主観・客観評価

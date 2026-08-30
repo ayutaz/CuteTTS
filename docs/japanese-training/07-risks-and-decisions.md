@@ -18,6 +18,11 @@
 | D-010 | Japanese VAEは条件付き | 提案採用 | 公式VAEがボトルネックの場合のみ |
 | D-011 | 10〜30h → 100〜500h → 1,000h → 3,000〜10,000h | 提案採用 | 各stageのexit gateを満たして進む |
 | D-012 | Guidance-step distillationは最後 | 提案採用 | 日本語base品質確定後 |
+| D-013 | 学習データは `midralab/gol-dataset`（10,654 h）と `ayousanz/moe-speech-plus`（621 h）を使う | 決定済み | ユーザーが提示。実測値は[データ棚卸し](data-inventory.md) |
+| D-014 | gol-datasetの利用条件は解決済みとして進める | 決定済み | ユーザー確認（2026-08-30）。R-009のうちデータ利用可否の部分はクローズ |
+| D-015 | splitはspeaker IDではなく **voiceクラスタ単位** で行う | 提案 | 両datasetのspeaker IDが声の識別子でないことが実測で判明（R-004参照）。P1dのクラスタリング結果で確定 |
+| D-016 | 総称ラベル話者・記号のみ発話・markup発話を学習から除外する | 提案 | 実測で対象を特定済み（[データ棚卸し](data-inventory.md) 第6節）。P1dのvalidatorで実装 |
+| D-017 | S0は moe-speech-plus、S1以降は gol-dataset を主軸にする | 提案 | moe側は話者あたり最小14.3分を保証しspeechMOSを持つ。gol側は規模を持つ |
 
 ## 2. 主要リスク
 
@@ -62,15 +67,31 @@
 
 ### R-004: Reference/target leakage
 
+**2026-08-30更新: 具体化した。当初想定より深刻。**
+
+実測の結果、**両datasetのspeaker IDは声の識別子ではない**ことが判明した。
+
+- gol-dataset: `speaker` = `SHA-256(キャラクター表示名)[:32]`。
+  同名異キャラが同一IDへ統合され、総称ラベル（`？？？`『女の子』等）は
+  複数の声が1 IDに混在する
+- moe-speech-plus: `uuid4().hex[:8]` のランダム値。READMEに
+  「同一声優が複数キャラを演じる場合・同一キャラが複数gameに登場する場合、
+  別の識別子が割り当てられる」と明記
+
 影響:
 
 - 見かけ上のvoice cloning成功
 - 未知話者で性能崩壊
+- **speaker-disjoint splitを行ってもvoice-actor-disjointにならず、
+  zero-shot評価が楽観側にバイアスする**
 
 対策:
 
 - 同一utterance・近重複を禁止
-- speaker-disjoint split
+- **voiceクラスタ単位のsplit**（D-015）。frozenの公式Speaker Encoder
+  （16 kHz → 256-dim）でspeaker IDごとの重心embeddingを作り、
+  cosine類似度でクラスタリングしてからsplitする
+- 総称ラベルはクラスタ内分散で検出して除外する（D-016）
 - pair provenanceをartifactへ保存
 
 ### R-005: Catastrophic forgetting
@@ -127,16 +148,45 @@
 
 ### R-009: データ・voice cloningの権利
 
+**2026-08-30更新: データ利用可否の部分はクローズ（D-014）。公開範囲の判断は残る。**
+
 影響:
 
-- checkpointやdatasetを公開できない
+- ~~datasetを利用できない~~ 解決
+- checkpointや生成物の公開範囲が未確定
 - 意図しない声の再現、同意範囲逸脱
 
 対策:
 
 - dataset単位のlicense/consent追跡
-- public/private modelの境界を先に決める
+- **artifactの音声を公開しない**（MoeSpeech LICENSEは音声ファイルを1つでも公開すれば
+  再配布とみなすと規定。`artifacts/` と `data/` はgitignore済み）
+- **話者IDを匿名化として扱わない**。gol-datasetのIDは `SHA-256(表示名)[:32]` であり、
+  一般的な名前は辞書攻撃で復元できる（本調査でも総称ラベル91件を復元した）
+- public/private modelの境界を決める（未確定）
 - model cardに用途・制限・known riskを記載
+
+### R-010: 学習データのdomainが偏っている
+
+**2026-08-30追加。実測により判明。**
+
+利用可能な両datasetはanime / visual novelの声優演技であり、中立的な朗読音声をほぼ含まない。
+
+影響:
+
+- 話者多様性と表現力では有利（実効話者数 約2,000〜3,500）
+- **数字・日付・単位・英数字混在の音声がほぼ無い。**
+  gol-datasetでASCII数字を含む発話は0.11%、ラテン文字は1.41%
+- [06章](06-evaluation-plan.md) 第3節の `text-challenge` が、学習分布の外になる
+- 生成音声が全体としてキャラクター演技寄りになる
+
+対策:
+
+- 目標を「日本語TTS一般」ではなく「日本語の表現的な多話者TTS」と言い直すか、
+  中立朗読データを別途追加するかを決める（未確定）
+- P1bのcoverage corpusを、学習分布（会話文）と評価分布（数字・固有名詞等）の
+  両方で分けて測る
+- `text-challenge` の結果を、他のmetricと同列に扱わず「分布外性能」として別記する
 
 ## 3. 未解決事項
 
@@ -148,11 +198,18 @@
 
 ### データ
 
-- 実際のaccepted hours、speaker数、speaker分布。
-- transcriptの精度と取得方法。
-- speaker IDの信頼性。
-- style/domain/収録環境。
-- ライセンスとmodel training/redistribution可否。
+2026-08-30時点。詳細は[データ棚卸し](data-inventory.md)。
+
+- ~~ライセンスとmodel training可否~~ 解決（D-014）。**redistribution / モデル公開範囲は未確定**。
+- ~~raw hours、speaker数、speaker分布~~ 実測済み。gol 10,654 h / 話者ID 19,349（実効 約2,000〜3,500）、
+  moe 621 h / 473話者。
+- ~~transcriptの取得方法~~ 解決。gol=ゲームスクリプト（正解）、moe=ASR 2系統。
+- ~~speaker IDの信頼性~~ 解決（**声の識別子ではない**。R-004参照）。voiceクラスタリングで対処する。
+- **accepted hours**（除外条件適用後の実数）。P1dのvalidator実行で確定する。
+- **同名異キャラの衝突率**（gol横断IDの61.3%が対象）。voiceクラスタリングで確定する。
+- gol側のtranscript精度（正解テキストと音声の実際の対応。`%bd` 等の変数を含む発話がある）。
+- 収録品質（BGM/SE混入、複数話者、クロストーク）。gol側は品質指標を持たない。
+- moe側ASR 2系統の一致率。
 
 ### Frontend
 
@@ -182,16 +239,20 @@
 
 ## 4. 次に確定すべき順序
 
-1. 公開checkpointのローカル推論再現
-2. データの権利・speaker分布・品質の概要
-3. Tokenizer coverage
-4. VAE reconstruction
-5. metadata/split/reference pairing
-6. training forwardとobjective
+2026-08-30更新。2はクローズ、1が全体のボトルネックになった。
+
+1. **公開checkpointのローカル推論再現**（P0）。weight取得は3・4・5すべての前提でもある
+2. ~~データの権利・speaker分布・品質の概要~~ 解決（D-013、D-014、[データ棚卸し](data-inventory.md)）
+3. Tokenizer coverage（P1b）
+4. VAE reconstruction（P1c）
+5. voiceクラスタリング → metadata/split/reference pairing（P1d、D-015）
+6. training forwardとobjective（P2）
 7. Stage 0のLR/freeze config
 8. 日本語/replay比率
 9. G2P/accentの追加可否
 10. Stage 2以降のGPU予算
+11. **モデル公開範囲**（R-009の残件。S3のmodel card作成までに確定させる）
+12. **目標の言い直しの要否**（R-010。中立朗読データを足すか、表現的多話者TTSに寄せるか）
 
 ## 5. 変更ルール
 
