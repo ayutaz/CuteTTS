@@ -92,6 +92,26 @@ class FlowBatch:
         return int(self.x_t.shape[0])
 
 
+def _generator_device(generator: torch.Generator | None) -> torch.device | None:
+    """generator が縛られている device。None なら device 指定なし。"""
+    return None if generator is None else generator.device
+
+
+def _randn(shape, *, generator, device, dtype) -> Tensor:
+    """generator の device と出力 device が食い違っても動く randn。
+
+    `torch.randn` は generator と device が一致していないと
+    ``Expected a 'cuda' device type for generator but found 'cpu'`` を投げる。
+    CPU generator で再現性を担保しつつ CUDA 上で学習したいので、
+    generator の device で作ってから移す。
+    """
+    gen_device = _generator_device(generator)
+    if generator is None or gen_device is None or gen_device.type == torch.device(device or "cpu").type:
+        return torch.randn(shape, generator=generator, device=device, dtype=dtype)
+    out = torch.randn(shape, generator=generator, device=gen_device, dtype=torch.float32)
+    return out.to(device=device, dtype=dtype)
+
+
 def sample_flow_time(
     n: int,
     *,
@@ -100,7 +120,7 @@ def sample_flow_time(
     dtype: torch.dtype = torch.float32,
 ) -> Tensor:
     """``t = sigmoid(u), u ~ N(0, 1)`` を n 個サンプルする。"""
-    u = torch.randn(n, generator=generator, device=device, dtype=dtype)
+    u = _randn((n,), generator=generator, device=device, dtype=dtype)
     return torch.sigmoid(u)
 
 
@@ -150,7 +170,7 @@ def build_flow_batch(
             raise ValueError(f"flow_time must have {batch} or {n} entries, got {t.shape[0]}")
         t = t.to(device=clean.device, dtype=clean.dtype)
 
-    noise = torch.randn(clean.shape, generator=generator, device=clean.device, dtype=clean.dtype)
+    noise = _randn(clean.shape, generator=generator, device=clean.device, dtype=clean.dtype)
     t_view = t.view(-1, 1, 1)
     x_t = (1.0 - t_view) * noise + t_view * clean
     velocity = clean - noise
@@ -302,7 +322,11 @@ def sample_condition_dropout(
             return torch.zeros(batch_size, dtype=torch.bool, device=device)
         if rate >= 1.0:
             return torch.ones(batch_size, dtype=torch.bool, device=device)
-        u = torch.rand(batch_size, generator=generator, device=device)
+        gen_device = _generator_device(generator)
+        if generator is not None and gen_device is not None and                 gen_device.type != torch.device(device or "cpu").type:
+            u = torch.rand(batch_size, generator=generator, device=gen_device).to(device)
+        else:
+            u = torch.rand(batch_size, generator=generator, device=device)
         return u < rate
 
     speaker = draw(config.speaker)

@@ -204,3 +204,47 @@ def test_speaker_may_be_absent():
     batch = build_flow_batch(target, z, previous, None, mask, copies=2,
                              generator=torch.Generator().manual_seed(15))
     assert batch.speaker is None
+
+
+def test_cpu_generator_works_with_a_non_cpu_target_dtype():
+    """CPU generator で CUDA テンソルを作れること。
+
+    `torch.randn(..., generator=cpu_gen, device='cuda')` は
+    `Expected a 'cuda' device type for generator but found 'cpu'` を投げる。
+    再現性のためにCPU generatorを使いつつGPUで学習したいので、
+    device が食い違っても動く必要がある。
+
+    CUDAが無い環境でも回帰を検出できるよう、まずCPUで契約を固定する。
+    """
+    g = torch.Generator().manual_seed(0)
+    t = sample_flow_time(8, generator=g, device=torch.device("cpu"), dtype=torch.float32)
+    assert t.device.type == "cpu"
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA が無い")
+def test_cpu_generator_produces_cuda_tensors():
+    g = torch.Generator().manual_seed(0)
+    cuda = torch.device("cuda")
+    t = sample_flow_time(8, generator=g, device=cuda, dtype=torch.float32)
+    assert t.device.type == "cuda"
+
+    target = torch.randn(3, PATCH, DIM, device=cuda)
+    batch = build_flow_batch(
+        target, torch.randn(3, HIDDEN, device=cuda),
+        torch.randn(3, PATCH, DIM, device=cuda), None,
+        torch.ones(3, dtype=torch.bool, device=cuda),
+        copies=2, generator=torch.Generator().manual_seed(1),
+    )
+    assert batch.x_t.device.type == "cuda"
+    assert batch.t.device.type == "cuda"
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA が無い")
+def test_condition_dropout_accepts_a_cpu_generator_on_cuda():
+    from cutetts.training.objectives import ConditionDropoutConfig, sample_condition_dropout
+
+    drop = sample_condition_dropout(
+        16, ConditionDropoutConfig(speaker=0.5, reference=0.5),
+        generator=torch.Generator().manual_seed(2), device=torch.device("cuda"),
+    )
+    assert drop["speaker"].device.type == "cuda"
