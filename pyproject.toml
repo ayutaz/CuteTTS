@@ -51,3 +51,4 @@ cutetts = ["demo/static/*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = ["slow: 実checkpointやGPUを要する重いテスト"]

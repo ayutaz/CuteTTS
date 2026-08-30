@@ -154,3 +154,37 @@ def test_export_requires_a_real_source_model_dir(tmp_path):
     model, _ = _make()
     with pytest.raises(FileNotFoundError):
         export_for_inference(tmp_path / "out", model=model, source_model_dir=tmp_path / "missing")
+
+
+@pytest.mark.slow
+def test_exported_checkpoint_loads_through_the_inference_path(tmp_path):
+    """export_for_inference の出力を `runtime.load_runtime` が読めること。
+
+    実checkpoint（model/CuteTTS）が必要なので slow。
+    """
+    import json
+    from pathlib import Path
+
+    from safetensors.torch import load_file
+
+    from cutetts.modeling.configuration import CuteTTSConfig
+    from cutetts.modeling.model import CuteTTSModel
+    from cutetts.runtime import load_runtime
+
+    source = Path("model/CuteTTS")
+    if not (source / "config.json").is_file():
+        pytest.skip("model/CuteTTS is not downloaded")
+
+    architecture = dict(json.loads((source / "config.json").read_text())["architecture"])
+    architecture.update(attn_implementation="sdpa", use_pretrained_lm=False, lm_model_name=None)
+    model = CuteTTSModel(CuteTTSConfig(**architecture))
+    model.load_state_dict(load_file(str(source / "weights/tts/model.safetensors")), strict=True)
+
+    out = tmp_path / "exported"
+    export_for_inference(out, model=model, source_model_dir=source)
+    bundle = load_runtime(out, device="cpu")
+    assert bundle.variant == "base"
+    assert bundle.sample_rate == 24000
+    assert float(bundle.model.speech_scaling_factor) == pytest.approx(
+        float(model.speech_scaling_factor)
+    )

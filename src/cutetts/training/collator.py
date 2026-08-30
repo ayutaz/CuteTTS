@@ -214,7 +214,13 @@ class TrainingBatch:
     target_patches: Tensor
     """[sum(N_b), P, D]。"""
     target_batch_index: Tensor
-    """[sum(N_b)] long。各targetが属する batch 行。"""
+    """[sum(N_b)] long。各targetが属する **batch 行**（hidden の取り出しに使う）。"""
+    target_sample_index: Tensor
+    """[sum(N_b)] long。各targetが属する **sample**（speaker の取り出しに使う）。
+
+    packing すると1行に複数sampleが入るため、行とsampleは一致しない。"""
+    speaker_slot_sample_index: Tensor
+    """[num_slots] long。speaker slot の出現順に、どのsampleのものかを示す。"""
     target_positions: Tensor
     """[sum(N_b)] long。各targetを予測する hidden の sequence index。"""
     previous_cond: Tensor
@@ -223,10 +229,19 @@ class TrainingBatch:
     """[sum(N_b)] long。"""
     target_mask: Tensor
     """[sum(N_b)] bool。padding や packing 境界で無効化された target は False。"""
+    attention_bias: Tensor | None = None
+    """[B, 1, L, L] の加算マスク。packing で segment 境界を遮断するときだけ使う。"""
+    position_ids: Tensor | None = None
+    """[B, L] long。packing で segment ごとに振り直すときだけ使う。"""
 
     @property
     def batch_size(self) -> int:
+        """行数。packing すると sample 数とは一致しない。"""
         return int(self.input_ids.shape[0])
+
+    @property
+    def num_samples(self) -> int:
+        return len(self.utterance_ids)
 
     @property
     def num_targets(self) -> int:
@@ -258,6 +273,12 @@ def collate(samples: list[TrainingSample], *, pad_token_id: int = SPEECH_PLACEHO
         torch.full((s.num_targets,), row, dtype=torch.long, device=device)
         for row, s in enumerate(samples)
     ])
+    # padding なしの collate では行とsampleが1対1
+    sample_index = target_index.clone()
+    slot_sample_index = torch.tensor(
+        [row for row, s in enumerate(samples) if bool(s.speaker_slot_mask.any())],
+        dtype=torch.long, device=device,
+    )
 
     return TrainingBatch(
         utterance_ids=[s.utterance_id for s in samples],
@@ -269,6 +290,8 @@ def collate(samples: list[TrainingSample], *, pad_token_id: int = SPEECH_PLACEHO
         speaker_slot_count=int(speaker.sum().item()),
         target_patches=torch.cat([s.target_patches for s in samples], dim=0),
         target_batch_index=target_index,
+        target_sample_index=sample_index,
+        speaker_slot_sample_index=slot_sample_index,
         target_positions=torch.cat([s.target_positions for s in samples], dim=0),
         previous_cond=torch.cat([s.previous_cond for s in samples], dim=0),
         stop_targets=torch.cat([s.stop_targets for s in samples], dim=0),

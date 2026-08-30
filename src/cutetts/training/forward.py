@@ -111,6 +111,8 @@ def training_forward(
     target_patches = batch.target_patches.to(device)
     previous_cond = batch.previous_cond.to(device)
     target_index = batch.target_batch_index.to(device)
+    target_sample = batch.target_sample_index.to(device)
+    slot_sample = batch.speaker_slot_sample_index.to(device)
     target_positions = batch.target_positions.to(device)
     stop_targets = batch.stop_targets.to(device)
     target_mask = batch.target_mask.to(device)
@@ -120,7 +122,7 @@ def training_forward(
     # condition dropout は sample 単位で引く
     if dropout is not None:
         drop = sample_condition_dropout(
-            batch.batch_size, dropout, generator=generator, device=device
+            batch.num_samples, dropout, generator=generator, device=device
         )
         # reference の drop は speech mask の reference 部分にだけ効かせたいが、
         # 現在の collator は reference と teacher-forced target を連結して持つ。
@@ -146,16 +148,20 @@ def training_forward(
     try:
         input_embeds, _contains_speech, _speech_features = model.prepare_input_embeds(
             segment,
-            lm_speaker_embedding=None if speaker is None else speaker[
-                speaker_mask.any(dim=1)
-            ],
+            lm_speaker_embedding=None if speaker is None else speaker[slot_sample],
         )
     finally:
         model.config.scale_acoustic_latent = scale_flag
 
+    if batch.attention_bias is not None:
+        # packing: segment 境界を遮断する加算マスクを使う
+        lm_attention = batch.attention_bias.to(device=device, dtype=input_embeds.dtype)
+    else:
+        lm_attention = attention_mask.long()
     lm_out = model.forward_lm(
         inputs_embeds=input_embeds,
-        attention_mask=attention_mask.long(),
+        attention_mask=lm_attention,
+        position_ids=None if batch.position_ids is None else batch.position_ids.to(device),
         use_cache=False,
     )
     hidden = lm_out.last_hidden_state
@@ -177,7 +183,7 @@ def training_forward(
         target_patches.to(head_dtype),
         z.to(head_dtype),
         previous_cond.to(head_dtype),
-        None if speaker is None else speaker[target_index].to(head_dtype),
+        None if speaker is None else speaker[target_sample].to(head_dtype),
         target_mask,
         copies=flow_copies,
         generator=generator,
