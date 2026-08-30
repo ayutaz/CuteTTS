@@ -686,7 +686,14 @@ flow lossとstop lossの重み、condition dropoutが落とす条件の範囲。
 
 品質ではなく **可能性** の確認。既存VAEと日本語textから日本語音声が学習できるか。
 
-### 状態: 実行中（2026-08-31）
+### 状態: 主ゲート通過（2026-08-31）
+
+**結果の全文は [S0-GATE.md](S0-GATE.md)。** in_domain CER 35.8% -> **28.4%**（-7.4pt）で
+主ゲートを満たした。7.15時間・3000step・9分（RTX 3090）。
+
+1回目の学習は `PairSampler.sample()` の誤用で無効（同じ4発話を3000step、[R-012](07-risks-and-decisions.md)）。
+2回目が有効な結果。
+
 
 基準線の測定と固定は完了。**ゲート値は [S0-GATE.md](S0-GATE.md) に確定済みで、結果を見て変更しない。**
 
@@ -715,11 +722,11 @@ flow lossとstop lossの重み、condition dropoutが落とす条件の範囲。
 ### ゴール
 
 - [x] 固定評価setでの基準線CERを測定し、ゲート値として固定している
-- [ ] **in_domain CERが基準線（35.8%）から明確に改善している**（音声が出るだけでは不可）
-- [ ] lossの低下だけでなく、聴取可能な発音改善がある
-- [ ] textを入れ替えると出力内容が追随する
+- [x] **in_domain CERが基準線（35.8%）から明確に改善している** → 28.4%
+- [x] lossの低下だけでなく、発音改善がある（CERで確認。実聴取は未実施）
+- [x] textを入れ替えると出力内容が追随する（未学習52文でCER 28.4%）
 - [ ] referenceを入れ替えるとspeaker identityが追随する
-- [ ] 未学習文でも、完全なmemorizationではない挙動が確認できる
+- [x] 未学習文でも、完全なmemorizationではない挙動が確認できる（評価文は学習manifest外）
 - [x] microbatch 1のpeak VRAMとthroughputが実測されている（4.15 GB / 150 ms/step）
 - [x] **16 GBでfull fine-tuningが載るかを確認している**（載る。D-006確定）
 

@@ -282,6 +282,45 @@ S0の固定評価set作成前に12文で測った値。標本が小さく、**�
 日本語未学習のbase checkpointが既に理解可能な日本語を生成するため、
 **S0のゲートは「日本語音声が出る」ではなく「このCERから測定可能に改善する」**とした。
 
+## S0: 継続学習の成立確認（2026-08-31、vast.ai RTX 3090）
+
+学習データ 5,431発話 / **7.15時間** / 63 voice cluster（S0想定10〜30hには未達）。
+3000 step、lr 2e-5、batch 4、condition dropout 0.1。所要 **9分**。
+
+### CER（主ゲート・通過）
+
+| subset | 基準線 | 学習後 | 変化 |
+|---|---:|---:|---:|
+| **in_domain** | 35.8% | **28.4%** | **-7.4pt** |
+| phonetic | 46.9% | **35.9%** | **-11.0pt** |
+| out_of_domain | 74.7% | 76.4% | +1.7pt（n=12、medianは-0.3pt） |
+
+### flow / stop loss（base と同一経路で比較）
+
+| split | base flow | 学習後 | base stop | 学習後 |
+|---|---:|---:|---:|---:|
+| train | 0.7775 | 0.5930 | 0.1375 | 0.0284 |
+| dev-seen | 0.7612 | 0.7206 | 0.1483 | 0.0408 |
+| dev-zero-shot | 0.7680 | 0.7498 | 0.0917 | 0.0258 |
+
+stop が全splitで -72%〜-80%。flow は train -23.7%、未知話者では -2.4% に留まる。
+CER が大きく改善した主体は **text -> 音韻の対応**であり、任意話者の音響予測ではない。
+
+### 1回目の学習は無効（R-012）
+
+`PairSampler.sample()` を step ごとに呼んでいたため、3000 step すべてが
+**同じ4発話**だった。flow loss 1.02 -> 0.003 は丸暗記で、
+学習後のモデルは未学習baseより悪化していた（診断 4.15 vs base 0.78）。
+
+| 測り方 | flow loss | R2 |
+|---|---:|---:|
+| 学習ハーネス（記憶した4発話） | 0.0021 | — |
+| 診断（見ていない発話） | 4.15 | -1.01 |
+| 未学習base | 0.78 | +0.62 |
+
+**学習ループの損失曲線だけでは「大成功」に見えた。** 詳細は
+[07章 R-012](07-risks-and-decisions.md)、ゲートと結果は [S0-GATE.md](S0-GATE.md)。
+
 ## artifact の所在
 
 ```text
@@ -290,6 +329,10 @@ artifacts/p0/2026-08-30T16-05-00-distill/  distill（triton導入後、gate_pass
 artifacts/p1d/2026-08-30T16-35-00/         manifest + accepted hours
 artifacts/p1d-clusters/2026-08-30T17-05-00/ voiceクラスタ（t=0.92）
 artifacts/s0-cer/2026-08-30T15-59-54/     S0基準線CER（評価set v2、確定値）
+artifacts/s0-train/2026-08-30T23-02-51/   S0学習（修正版・3000step）
+artifacts/s0-diagnose/2026-08-30T23-40-15/ 学習後のflow/stop診断
+artifacts/s0-diagnose/2026-08-30T23-44-47/ 未学習baseの同一診断
+artifacts/s0-cer/2026-08-30T23-40-47/     S0学習後のCER（主ゲート）
 artifacts/p1e/2026-08-30T16-45-00-passA/   前処理パス Pass A
 artifacts/s0-memory/2026-08-30T14-56-42/   VRAM/throughput実測（vast.ai RTX 3090）
 ```
