@@ -173,6 +173,50 @@ original languages: 5–10%
 
 ## 7. Audio VAE再学習の条件
 
+### P1c 実測結果（2026-08-30）
+
+公式Audio VAE（`model/CuteTTS/weights/audio_vae`）で日本語音声をencode→decodeし、
+original と reconstruction を比較した。moe-speech-plus の実音声を使用。
+
+**音響指標**（80発話 / 10話者、f0 101〜473 Hz）
+
+| 指標 | mean | P50 | min | max |
+|---|---:|---:|---:|---:|
+| **speaker embedding cos類似度** | **0.9392** | 0.9429 | 0.8643 | 0.9759 |
+| SNR (dB) | 9.27 | 9.30 | 2.63 | 14.08 |
+| log-mel L1 | 0.651 | 0.651 | 0.461 | 0.985 |
+| latent frame rate | 12.589 Hz（仕様12.5） | | | |
+
+話者10名すべてが平均0.909以上。短い発話（<3秒）でわずかに低下（0.925 vs 0.943）するが破綻しない。
+SNRが低いのは、VAEが波形をサンプル単位で再現せず位相が変わるためで、この種のモデルでは弱い指標。
+
+**ASR CER**（60発話 / 10話者、ASR = `kotoba-tech/kotoba-whisper-v2.0`）
+
+| 比較 | mean | P50 | P90 |
+|---|---:|---:|---:|
+| dataset転写 vs original音声ASR | 7.83% | 4.35% | 23.53% |
+| dataset転写 vs reconstruction音声ASR | 8.41% | 4.55% | 25.00% |
+| **original ASR vs reconstruction ASR** | **2.21%** | **0.00%** | 8.33% |
+
+**CER差（reconstruction − original）= +0.58ポイント。**
+3行目はASR自身の誤りが相殺されるためVAE劣化の直接指標であり、
+**中央値0.00%は「半数の発話がVAE往復後も完全に同一の転写になる」ことを意味する。**
+
+誤りの例（`太一`→`大地`、`なぁ`→`ああ`）は語頭の子音・母音の取り違えで、
+いずれもASR自身がdataset転写と食い違っている箇所でもある。
+
+### 判断（提案）
+
+**公式VAEをfreezeしたまま日本語継続学習へ進んでよい**（D-003を支持）。
+音韻情報・話者性ともに実用上保たれており、VAEがボトルネックである証拠は得られなかった。
+Stage 4（Japanese VAE）は当面着手しない。
+
+未実施: PESQ / STOI / UTMOS、日本語母語話者によるblind listening、
+促音・撥音・長音・無声化に特化した固定subsetでの評価。
+これらは自動指標がVAE起因の劣化を見落としていないかの追加確認として残す。
+
+### 再学習を検討する条件
+
 日本語専用VAEは将来候補ですが、最初から実施しません。
 
 再学習を検討する条件:

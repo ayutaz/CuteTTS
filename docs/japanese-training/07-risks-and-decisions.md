@@ -8,14 +8,14 @@
 |---|---|---|---|
 | D-001 | 既存base checkpointから継続学習する | 決定済み | ユーザーの明示方針 |
 | D-002 | distill checkpointを最初の起点にしない | 提案採用 | base適応後にdistillする方が分析しやすい |
-| D-003 | 初期はAudio VAEをfreeze | 提案採用 | P1の日本語再構成で再判定 |
+| D-003 | 初期はAudio VAEをfreeze | **確定** | P1c実測で支持。CER差 +0.58pt、original/reconstruction間CERの中央値0.00%、speaker cos 0.939（[02章 §7](02-continual-training-strategy.md)） |
 | D-004 | 初期はSpeaker Encoderをfreeze | 提案採用 | zero-shot SIMで再判定 |
 | D-005 | Patch Encoderをtrainする案を主案にする | 提案 | freeze variantとStage 0/1で比較 |
 | D-006 | 最初はfull fine-tuning | 提案 | VRAM・安定性・forgettingで再判定 |
-| D-007 | 既存Tokenizerを先に測る | 提案採用 | coverage reportで維持/拡張を決定 |
+| D-007 | 既存Tokenizerを先に測る | **完了** | P1b実測済み。`<unk>` 0%だがbyte-fallbackがtokenの9.66%・文の45.6%（[02章 §4](02-continual-training-strategy.md)） |
 | D-008 | Raw textから開始し、reading/accentを段階追加 | 提案採用 | 読み誤り分析で追加 |
 | D-009 | 日本語90〜95% + replay 5〜10% | 未確定 | 100%日本語との比較が必要 |
-| D-010 | Japanese VAEは条件付き | 提案採用 | 公式VAEがボトルネックの場合のみ |
+| D-010 | Japanese VAEは条件付き | **当面見送り** | P1cで公式VAEがボトルネックである証拠は得られなかった。S4は着手しない |
 | D-011 | 10〜30h → 100〜500h → 1,000h → 3,000〜10,000h | 提案採用 | 各stageのexit gateを満たして進む |
 | D-012 | Guidance-step distillationは最後 | 提案採用 | 日本語base品質確定後 |
 | D-013 | 学習データは `midralab/gol-dataset`（10,654 h）と `ayousanz/moe-speech-plus`（621 h）を使う | 決定済み | ユーザーが提示。実測値は[データ棚卸し](data-inventory.md) |
@@ -23,6 +23,8 @@
 | D-015 | splitはspeaker IDではなく **voiceクラスタ単位** で行う | 提案 | 両datasetのspeaker IDが声の識別子でないことが実測で判明（R-004参照）。P1dのクラスタリング結果で確定 |
 | D-016 | 総称ラベル話者・記号のみ発話・markup発話を学習から除外する | 提案 | 実測で対象を特定済み（[データ棚卸し](data-inventory.md) 第6節）。P1dのvalidatorで実装 |
 | D-017 | S0は moe-speech-plus、S1以降は gol-dataset を主軸にする | 提案 | moe側は話者あたり最小14.3分を保証しspeechMOSを持つ。gol側は規模を持つ |
+| D-018 | 既存Tokenizerを維持したままStage 0を開始する | 提案 | P1c実測で情報欠落なし。互換拡張はStage 0/1の結果を見て判断（D-007の分岐1） |
+| D-019 | 日本語ASRは `kotoba-tech/kotoba-whisper-v2.0` に固定する | 提案 | P1cのCER測定で使用。06章が要求する「ASRのversion固定」に対応 |
 
 ## 2. 主要リスク
 
@@ -146,19 +148,6 @@ gol-dataset全体（7 TB）のダウンロードは容量的には可能です�
 - distributed scalingを短時間runで測る
 - P1eの前処理パスで、まずVAE encode + Speaker Encoderの実VRAM使用量を測る
 
-### R-011: 実行環境の再現性
-
-**2026-08-30追加。**
-
-システム既定のPythonは3.14で、**torch 2.5.1 が対応していない**（3.9〜3.12のみ）。
-このリポジトリの作業は `.venv`（Python 3.12 + torch 2.5.1+cu121）で行う必要があります。
-
-対策:
-
-- 実行コマンドは `.venv/Scripts/python.exe` を使う
-- `artifacts/*/env.json` にpython / torch / GPU / cutetts commitを必ず記録する
-  （`cutetts.training.artifacts.env_snapshot`）
-
 ### R-008: Streaming品質の回帰
 
 影響:
@@ -214,6 +203,19 @@ gol-dataset全体（7 TB）のダウンロードは容量的には可能です�
   両方で分けて測る
 - `text-challenge` の結果を、他のmetricと同列に扱わず「分布外性能」として別記する
 
+### R-011: 実行環境の再現性
+
+**2026-08-30追加。**
+
+システム既定のPythonは3.14で、**torch 2.5.1 が対応していない**（3.9〜3.12のみ）。
+このリポジトリの作業は `.venv`（Python 3.12 + torch 2.5.1+cu121）で行う必要があります。
+
+対策:
+
+- 実行コマンドは `.venv/Scripts/python.exe` を使う
+- `artifacts/*/env.json` にpython / torch / GPU / cutetts commitを必ず記録する
+  （`cutetts.training.artifacts.env_snapshot`）
+
 ## 3. 未解決事項
 
 ### 目的と公開範囲
@@ -239,9 +241,10 @@ gol-dataset全体（7 TB）のダウンロードは容量的には可能です�
 
 ### Frontend
 
-- 既存Tokenizerの実coverage。
-- normalization仕様。
-- G2P toolと辞書。
+- ~~既存Tokenizerの実coverage~~ 解決（P1b）。`<unk>` 0%、byte-fallback 9.66%。
+- **vocabulary拡張を行うか**（byte分解される約700字種の追加）。Stage 0/1の結果で判断。
+- normalization仕様（NFKCで2.36%の文のtoken数が変わる）。
+- G2P toolと辞書。golのルビmarkup `<rかな>` を読み情報に転用できるかは未検証。
 - reading/accentの入力表現。
 - tokenizer拡張時の既存embedding互換。
 
@@ -257,8 +260,9 @@ gol-dataset全体（7 TB）のダウンロードは容量的には可能です�
 
 ### Evaluation
 
-- 固定する日本語ASR。
-- speaker similarity model。
+- ~~固定する日本語ASR~~ 暫定確定（D-019: `kotoba-tech/kotoba-whisper-v2.0`）。
+- ~~speaker similarity model~~ 公式Speaker Encoder（ECAPA student 256次元）を使用。
+- PESQ / STOI / UTMOS は未導入。P1cでは測っていない。
 - 日本語母語話者による主観評価体制。
 - 公開前の合格閾値。
 - safety/abuse evaluation。
