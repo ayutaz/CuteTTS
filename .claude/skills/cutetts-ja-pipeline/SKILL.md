@@ -29,7 +29,11 @@ uv pip install --python .venv/Scripts/python.exe -e .
 uv pip install --python .venv/Scripts/python.exe pytest pyyaml triton-windows
 ```
 
-`uv` が無ければ `.venv/Scripts/python.exe -m pip install ...` で代用できる。
+`uv` が無ければ `py -3.12 -m venv .venv` で作り、以降は
+`.venv/Scripts/python.exe -m pip install ...` で代用できる。
+
+checkpointとデータの取得には Hugging Face CLI が要る（`pip install -U huggingface_hub`、
+`hf auth login` で認証）。両datasetは gated なのでアクセス権が必要。
 
 ```bash
 hf download OPPOer/CuteTTS --local-dir ./model/CuteTTS
@@ -39,11 +43,15 @@ hf download OPPOer/CuteTTS-distill --local-dir ./model/CuteTTS-distill
 データ（`data/` は gitignore。既定パスは各スクリプトの引数既定値）:
 
 ```text
-data/raw/gol/metadata.tsv     # gol-dataset のメタデータ（1.68 GB）
-data/raw/gol/tars/*.tar       # gol の音声書庫
-data/raw/moe/*.zip            # moe-speech-plus の話者zip
-data/raw/moe/info.csv         # moe の話者一覧
+data/raw/gol/metadata.tsv     # midralab/gol-dataset の metadata.tsv（1.68 GB）
+data/raw/gol/tars/*.tar       # 同上の音声書庫（全602本で7 TB。必要な分だけ落とす）
+data/raw/moe/*.zip            # ayousanz/moe-speech-plus の話者zip
+data/raw/moe/info.csv         # 同上の話者一覧
 ```
+
+入手元は HF の `midralab/gol-dataset` と `ayousanz/moe-speech-plus`。
+どちらも gated で、全量は 7 TB + 152 GB あるため必要な分だけ取得する。
+選び方や実測値は [`docs/japanese-training/data-inventory.md`](../../../docs/japanese-training/data-inventory.md)。
 
 動作確認: `.venv/Scripts/python.exe -m pytest tests/training -q -p no:warnings`
 
@@ -55,7 +63,7 @@ data/raw/moe/info.csv         # moe の話者一覧
 | p1b | `analyze_japanese_tokenizer.py` | 不要 | `model/CuteTTS/tokenizer`, gol metadata | `artifacts/p1b/<ts>/` |
 | p1c | `evaluate_japanese_vae.py` | **要** | VAE weight, `data/raw/moe/*.zip` | `artifacts/p1c/<ts>/` |
 | p1d | `prepare_japanese_manifest.py` | 不要 | gol metadata + tars, moe zips | `data/manifests/{gol,moe,all}.jsonl`, `artifacts/p1d/<ts>/` |
-| p1e | `cache_audio_latents.py` | **要** | `data/manifests/all.jsonl` | `data/cache/{latents,speaker}/`, `artifacts/p1e/<ts>/` |
+| p1e | `cache_audio_latents.py` | **要** | `data/manifests/all.jsonl` + `model/CuteTTS`（VAE と Speaker Encoder） | `data/cache/{latents,speaker}/`, `artifacts/p1e/<ts>/` |
 | p1d | `build_voice_clusters.py` | 不要 | `data/cache/speaker/`, manifest | `data/manifests/all_clustered.jsonl`, `artifacts/p1d-clusters/<ts>/` |
 
 **依存順序**: `prepare_japanese_manifest` → `cache_audio_latents` → `build_voice_clusters`。
@@ -69,7 +77,7 @@ P0/P1b/P1c は互いに独立（P1cは音声zipだけあればよい）。
 # P0（GPU）。gate_passed は artifacts/p0/<ts>/metrics.json の summary.gate_passed
 .venv/Scripts/python.exe scripts/reproduce_baseline.py --sampler-compile-mode auto
 .venv/Scripts/python.exe scripts/reproduce_baseline.py --checkpoint CuteTTS-distill
-jq '.summary' artifacts/p0/*/metrics.json
+jq '.summary' artifacts/p0/*/metrics.json   # gate_passed は true/false。error_cases が 0 で全ケース ok なら true
 
 # P1b（CPU）
 .venv/Scripts/python.exe scripts/analyze_japanese_tokenizer.py \
@@ -91,6 +99,17 @@ jq '.summary' artifacts/p0/*/metrics.json
 
 `--sampler-compile-mode` の有効値: `auto`（triton有無で判定）/ `eager` / `euler-only` / `full-sampler`。
 tritonを入れられないなら `eager` で回避できる（RTFは悪化する）。
+
+**ユーザーへ伝える見積もり（実測値）**
+
+| スクリプト | スループット | peak VRAM |
+|---|---|---:|
+| `reproduce_baseline.py` | 1 checkpointあたり数分（model load 44〜56秒） | 2.05 GB |
+| `cache_audio_latents.py` | **44.5× realtime**（音声8.13時間を658秒） | 2.48 GB |
+| `evaluate_japanese_vae.py` | 10話者80発話で数分 | 1.5 GB |
+
+gol全体（10,654時間）をP1eに通すと **約239 GPU時間 / latent cache 65.3 GB**。
+これはローカルで回すには重すぎるので vast.ai を検討する。
 
 パイロットと本実行は同じcacheへ書く。**衝突ではなく再開**として扱われる（既存IDはスキップ）。
 
