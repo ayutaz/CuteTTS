@@ -50,5 +50,8 @@ cutetts = ["demo/static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
-markers = ["slow: 実checkpointやGPUを要する重いテスト"]
+addopts = "-q -m 'not gpu'"
+markers = [
+  "slow: 実checkpointを要する重いテスト",
+  "gpu: CUDAを要するテスト。既定では実行しない（ローカルGPUを勝手に使わないため）。実行は -m gpu を明示する。通常は vast.ai 上で走らせる",
+]

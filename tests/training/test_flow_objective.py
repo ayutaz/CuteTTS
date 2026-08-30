@@ -221,6 +221,7 @@ def test_cpu_generator_works_with_a_non_cpu_target_dtype():
     assert t.device.type == "cpu"
 
 
+@pytest.mark.gpu
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA が無い")
 def test_cpu_generator_produces_cuda_tensors():
     g = torch.Generator().manual_seed(0)
@@ -239,6 +240,7 @@ def test_cpu_generator_produces_cuda_tensors():
     assert batch.t.device.type == "cuda"
 
 
+@pytest.mark.gpu
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA が無い")
 def test_condition_dropout_accepts_a_cpu_generator_on_cuda():
     from cutetts.training.objectives import ConditionDropoutConfig, sample_condition_dropout
