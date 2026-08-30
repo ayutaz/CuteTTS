@@ -22,6 +22,8 @@
 - forkをローカルへclone済み
 - `main` から `feat/japanese-training` ブランチを作成済み
 - 先行会話、ローカル実装、公式README、論文v2、公開checkpoint構成を調査済み
+- 日本語データ候補の特定（gol-dataset 10,654 h、moe-speech-plus 152 GB）。
+  実測値は [データ棚卸し](data-inventory.md) を参照
 
 ### 未実施
 
@@ -29,6 +31,7 @@
 - 公式Tokenizerの日本語coverage測定
 - 公式Audio VAEによる日本語再構成評価
 - 日本語metadataの実データ検証
+- gol-datasetの利用条件の確定（license記載がなく、S1以降の規模を左右する）
 - 学習用forward、loss、packing、trainerの実装
 - 日本語のoverfit test、PoC、継続学習
 - 日本語モデルの主観・客観評価
@@ -54,7 +57,8 @@
 6. [評価計画](06-evaluation-plan.md)
 7. [リスク、意思決定、未解決事項](07-risks-and-decisions.md)
 8. [対応計画（実行フェーズ定義）](08-execution-plan.md)
-9. [一次資料](references.md)
+9. [データ棚卸し](data-inventory.md)
+10. [一次資料](references.md)
 
 ## 現時点の要約
 

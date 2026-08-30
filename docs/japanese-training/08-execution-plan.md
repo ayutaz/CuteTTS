@@ -54,6 +54,19 @@ artifacts/p0/2026-08-30T12-00-00/
 `run.json` に **cutetts側のcommit hash** を必ず含めます。コードが変わった後のartifactを
 同じ表で比較しないためです。
 
+### artifactの公開制限（決定済み）
+
+学習データのライセンス（[data-inventory.md](data-inventory.md)）により、次を規約とします。
+
+- `artifacts/` 配下の音声を **リポジトリに入れない・公開しない**。
+  MoeSpeech LICENSEは「音声ファイルを1つであっても公開することは再配布とみなす」と規定しており、
+  P0/P1cの `samples/` は元音声そのものを含む
+- 評価reportに識別名（speaker hash）を載せる場合も、少数話者の特徴を再現した音声と
+  対応づけて公開しない
+- モデルcheckpointの公開はMoeSpeech LICENSE上は禁止されていない（「そのモデルを公開することは
+  再配布とみなしません」と明記）。ただしgol-dataset側の条件が未確定のため、
+  公開可否はP1aの結論を待つ
+
 ### フェーズの完了宣言
 
 「スクリプトを実装した」ではなく「実行して成果物が揃った」で完了とします。
@@ -118,6 +131,20 @@ CLIにはこの計測がないため、streaming計測は `generate_stream()` �
 ### 目的
 
 「約10,000時間」を、権利・品質・話者分布が判明した **投入可能な時間数** に置き換える。
+
+### 進捗
+
+候補datasetは特定済み。実測値は [data-inventory.md](data-inventory.md) にある。
+
+- [midralab/gol-dataset](https://huggingface.co/datasets/midralab/gol-dataset):
+  10,654 h / 19,349話者 / 7,405,094発話 / 7,019 GB / 48 kHz mono 32bit /
+  visual novel domain。**license記載なし（未確定）**
+- [ayousanz/moe-speech-plus](https://huggingface.co/datasets/ayousanz/moe-speech-plus):
+  152 GB / anime domain / speechMOS・2系統transcription・感情ラベル付き。
+  MoeSpeech LICENSE（著作権法30条の4、モデル公開は再配布に当たらないと明記）
+
+**残る最大の未確定はgol-datasetの利用条件。** 時間数の面ではS3の目標を単独で満たすため、
+ここが確定しない限りS1以降の規模計画が立ちません。
 
 ### ゴール
 
@@ -269,10 +296,23 @@ streaming decode経路（`vae.streaming_decode()`）でも同じ入力を通し�
 - `scripts/prepare_japanese_manifest.py`
 - `tests/training/test_manifest.py`, `tests/training/test_pairing.py`
 
+### 実データ由来の設計課題（[data-inventory.md](data-inventory.md)）
+
+- **speaker IDの粒度**: gol-datasetの `speaker` がgame横断で一意かが未確定。
+  game内でのみ一意なら、同一声優が別IDとしてtrain/zero-shot splitの両側に現れる。
+  `metadata.tsv` 取得後、最初にこれを判定する
+- **reference長**: 発話の平均は5.18秒・中央値4.55秒だが、推論側の `prepare_reference_audio` は
+  VAE用に先頭30秒を想定している。1発話をそのままreferenceにすると学習と推論が乖離するため、
+  (A) 同一speakerの複数発話を連結 / (B) reference長を実分布に合わせ推論側の既定値も見直す /
+  (C) reference長をランダム化、のいずれかを決める
+- **非音声・極端に短い発話**: 0-1秒が4.39%あり、テキストが `…………` の発話も実在する。
+  validatorで除外条件を定義する
+
 ### 判断ゲート
 
 - R-004（leakage）: pair provenanceがartifactに残ることを確認する
 - D-009（日本語/replay比率）: replay用の既存言語データが実在するかをここで確定する
+- reference長の方針（上記A/B/Cのいずれか）を確定する
 
 ### 前提作業
 
@@ -331,6 +371,10 @@ flow lossとstop lossの重み、condition dropoutが落とす条件の範囲。
 - Test: `tests/training/test_latents.py`
 - 検証: 同じwaveformから2回生成したlatentが一致する / cacheにVAE checkpoint revisionと
   preprocessing versionが記録され、不一致のcacheをloadすると例外になる
+- 規模の根拠（[data-inventory.md](data-inventory.md)）: gol-dataset 10,654時間ぶんのlatentは
+  fp16で約61 GB（元音声は7,019 GB）。**cache生成後は学習時に元音声が不要**になる。
+  ローカルに7 TBを常駐させないよう、tar単位で「取得 → 24 kHz変換 → encode → cache書き出し →
+  音声破棄」のストリーミング処理にする（提案）
 
 **Task 2: reference/target pairing（学習用samplerへの拡張）**
 - Modify: `src/cutetts/training/pairing.py`（P1dで作成済み）
@@ -535,13 +579,19 @@ P1a ── P1d ── P2┘                │
 
 以下はコードでは決められず、この計画の規模そのものを変えます。
 
-1. **日本語データは現時点で手元にあるか。** ある場合、時間数・話者数・transcriptの有無・license。
-   無い場合、P1cとS0に使う最小限の日本語音声をどこから用意するか。
+1. ~~**日本語データは現時点で手元にあるか。**~~ 解決。gol-dataset（10,654 h）と
+   moe-speech-plus（152 GB）を特定済み。[data-inventory.md](data-inventory.md) 参照。
+   **ただしgol-datasetのlicenseが未記載** であり、これがS1以降の規模を決める最大の未確定事項。
 2. **checkpointを公開するか、内部利用に限定するか。** 公開する場合、voice cloningの提供条件と
-   データ側の再配布可否がP1aの必須項目になる。
+   データ側の再配布可否がP1aの必須項目になる。MoeSpeech LICENSEはモデル公開を許容するが、
+   gol-dataset側は未確定。
 3. **日本語専用性能を最優先するか、既存5言語の能力を残すか。** replay data確保の要否が変わる。
 4. **利用可能なGPU。** 現時点で使える機材（開発機・クラウド）が、S0の実施可否を直接決める。
+   あわせて、latent cache生成（7 TBのI/O）を実行できるストレージと帯域も必要。
 5. **日本語母語話者による主観評価の実施体制。** S1以降のexit gateに聴取評価が含まれる。
+6. **目標を「日本語TTS一般」から「日本語の表現的な多話者TTS」へ言い直すか。**
+   利用可能な両datasetがanime / visual novel domainに偏っており、中立的な朗読音声を
+   ほぼ含まない。別途データを足すか、目標を実データに合わせるかの判断が要る。
 
 ## 関連資料
 
