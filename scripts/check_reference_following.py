@@ -135,12 +135,12 @@ def main() -> None:
     for text_index, text in enumerate(DEFAULT_TEXTS):
         for ref_index, ref_path in enumerate(ref_paths):
             out_path = audio_dir / f"t{text_index}_ref{ref_index}.wav"
-            waveform = tts.generate(
+            result = tts.generate(
                 text, mode="voice_clone", reference_audio=str(ref_path),
                 seed=args.seed, max_decode_length=args.max_decode_length,
                 show_progress=False)
-            sf.write(str(out_path), waveform.squeeze().cpu().float().numpy(),
-                     tts.runtime.sample_rate)
+            sf.write(str(out_path), result.waveform.squeeze().cpu().float().numpy(),
+                     result.sample_rate)
             embedding = speaker_embedding(tts, out_path)
             sims = [float(torch.nn.functional.cosine_similarity(
                 embedding, ref, dim=0)) for ref in ref_embeds]
