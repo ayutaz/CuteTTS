@@ -73,6 +73,52 @@ CuteTTS-JA-distill
 2. `<unk>` または過剰分割が重大な場合、既存token IDとの互換性を壊さないvocabulary拡張を設計する。
 3. 文字入力だけでは読み精度が不足する場合、Tokenizer全交換の前にreading/G2Pを追加入力する。
 
+### T0 実測結果（2026-08-30）
+
+gol-datasetの実テキスト 200,000文 / 5,594,489 tokenで測定（公式tokenizer、`model/CuteTTS/tokenizer`）。
+
+| 指標 | 実測値 |
+|---|---:|
+| **文単位 `<unk>` 率** | **0.0000%**（0文） |
+| **token単位 `<unk>` 率** | **0.0000%**（0/5,594,489） |
+| tokens per char | 1.1381（= 0.879 文字/token） |
+| token長 P50 / P95 / P99 / max | 25 / 58 / 75 / 211 |
+| NFKC正規化でtoken数が変わる文 | 2.357% |
+| **byte-fallback token率** | **9.658%**（540,330 token） |
+| **byte-fallbackを含む文** | **45.64%** |
+
+**`<unk>` が0なのは、tokenizerが256個のbyte-fallbackピースを持つため**であり、
+日本語をよく表現できているからではない。実際には次が単一ピースを持たない。
+
+- ひらがな15字種（小書き仮名 `ぅ ぉ ぃ ゅ` 等。会話文で頻出）
+- 漢字643字種
+- カタカナ18字種
+- `～ ― ♪` 等の記号
+
+例: `龗` → 4 token、`😀` → 5 token、`麻` → 2 token。
+
+special tokenのID: `<|im_start|>`=4、`<|im_end|>`=5、`<|endofprompt|>`=16384（拡張分）。
+
+#### 実効text予算
+
+`config.json` の `processor.segment.max_length` は既定の4096ではなく **10240**。
+
+| mode | prompt overhead | reference patch | 日本語text予算 |
+|---|---:|---:|---:|
+| tts | 15 token | 0 | 10,225 token ≒ 8,984 文字 |
+| voice_clone（ref 10秒） | 40 token | 63 | 10,137 token ≒ 8,907 文字 |
+| voice_clone（ref 30秒） | 40 token | 188 | 10,012 token ≒ 8,797 文字 |
+
+**系列長は制約にならない**（gol発話の平均は23文字）。
+
+#### 判断（提案）
+
+情報欠落が無いため **分岐1（既存Tokenizer維持）で学習を開始できる**。
+一方、byte-fallbackが45.6%の文に及ぶため **分岐2（互換拡張）の価値は高い**。
+頻出する約700字種を単一ピースとして追加すれば系列長を約10%削減でき、
+モデルがbyte列から文字を再構成する負担も消える。
+拡張は既存token ID・embedding行を保持したまま追加分のみ行う設計が前提（D-007）。
+
 SentencePiece modelの拡張は、単に別modelへ置き換えればよいわけではありません。既存token ID、embedding行、special token、checkpoint loadを保持する設計と変換テストが必要です。
 
 ## 5. 日本語frontendの実験順
