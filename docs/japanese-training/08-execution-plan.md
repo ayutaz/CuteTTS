@@ -17,25 +17,28 @@
 
 ## 全体像
 
-| ID | フェーズ | 目的（答える問い） | 前提 | 並行 |
-|---|---|---|---|---|
-| P0 | 推論ベースライン再現 | 公開checkpointがこの環境で正しく動くか | weight取得 | — |
-| P1a | データ実態調査 | 実際に学習へ投入できるデータは何時間・何話者か | データ所在の把握 | P0と並行可 |
-| P1b | Tokenizer coverage | 公式Tokenizerは日本語を表現できるか | P0 | P1cと並行可 |
-| P1c | Audio VAE 日本語再構成 | 公式VAEをfreezeしたまま進めてよいか | P0 + 日本語音声 | P1bと並行可 |
-| P1d | Manifest / split / pairing | 再現可能なデータ入口があるか | P1a, P1e | — |
-| P1e | 前処理パス | 全音声1パスでlatentとspeaker embeddingを作れるか | P0 | — |
-| P2 | 学習forward復元 | 公開moduleから正しい学習stepを構成できるか | P0, P1d, P1e | — |
-| S0 | 10〜30h overfit | 日本語がそもそも学習できるか | P1b, P1c, P2 | — |
-| S1 | 100〜500h PoC | 日本語品質とzero-shot cloningが成立するか | S0 | — |
-| S2 | 1,000h | 分布を広げても安定するか（v0.1候補） | S1 | — |
-| S3 | 3,000〜10,000h | 最終baseモデルを作れるか | S2 | — |
-| S4 | Japanese Audio VAE | VAEがボトルネックの場合のみ実施 | 条件付き | — |
-| S5 | Guidance-step distillation | 日本語baseを高速化できるか | S3 | — |
+| ID | フェーズ | 目的（答える問い） | 状態 |
+|---|---|---|---|
+| P0 | 推論ベースライン再現 | 公開checkpointがこの環境で正しく動くか | **完了**（gate_passed: true） |
+| P1a | データ実態調査 | 実際に学習へ投入できるデータは何時間・何話者か | **完了**（accepted 10,466.4 h） |
+| P1b | Tokenizer coverage | 公式Tokenizerは日本語を表現できるか | **完了**（`<unk>` 0%、byte-fallback 9.66%） |
+| P1c | Audio VAE 日本語再構成 | 公式VAEをfreezeしたまま進めてよいか | **完了**（CER差 +0.58pt → freeze確定） |
+| P1d | Manifest / split / pairing | 再現可能なデータ入口があるか | **完了**（voiceクラスタ t=0.92、leakage 0） |
+| P1e | 前処理パス | 全音声1パスでlatentとspeaker embeddingを作れるか | **Pass A完了**（Pass BはS2直前） |
+| P2 | 学習forward復元 | 公開moduleから正しい学習stepを構成できるか | **次はここ** |
+| S0 | 10〜30h overfit | 日本語がそもそも学習できるか | 未着手（P2待ち） |
+| S1 | 100〜500h PoC | 日本語品質とzero-shot cloningが成立するか | 未着手 |
+| S2 | 1,000h | 分布を広げても安定するか（v0.1候補） | 未着手 |
+| S3 | 3,000〜10,000h | 最終baseモデルを作れるか | 未着手 |
+| S4 | Japanese Audio VAE | VAEがボトルネックの場合のみ実施 | **見送り**（P1cで根拠なし・D-010） |
+| S5 | Guidance-step distillation | 日本語baseを高速化できるか | 未着手 |
 
-**2026-08-30時点でP1aは実質完了。次に着手すべきはP0です。**
-P0の最初の作業であるcheckpoint取得が、P1b（Tokenizer）・P1c（VAE）・P1e（前処理パス）
-すべての前提になっており、**現在の唯一のボトルネック**です。
+**2026-08-30時点で P0 と P1 は完了。次に着手すべきは P2（学習forward復元）です。**
+P2はCPUのみで実装まで進められます。GPUが必要になるのはP2の検証（tiny batch）と
+S0の学習からで、**ローカルGPUを使う処理は実行前に必ずユーザーへ確認すること**。
+
+実行に使うコマンドは `docs/japanese-training/RESULTS.md` と
+`.claude/skills/cutetts-ja-pipeline/SKILL.md` にまとまっています。
 
 ## 共通ルール（提案）
 
@@ -83,15 +86,36 @@ artifacts/p0/2026-08-30T12-00-00/
 日本語以前に、このforkと公開checkpointがこの環境で正しく動くことを確認し、
 以降のすべての比較の基準線（音声・速度・メモリ）を作る。
 
-### ゴール
+### 状態: 完了（2026-08-30、`gate_passed: true`）
 
-- [ ] base / distill の両weightをrevision固定で取得し、`inputs.json` にrepo id・revision・
-      `model.safetensors` のchecksumを記録している
-- [ ] 次の8通りで、無音・NaN・途中切れのないwaveformが生成される
-      `{base, distill} × {tts, voice_clone} × {offline, streaming}`
-- [ ] 同一text・同一reference・同一seedで2回実行し、結果が一致する（または差分の大きさを記録している）
-- [ ] first-audio latency (TTFA)、RTF、peak VRAM のローカル基準値が `metrics.json` にある
-- [ ] streaming出力とoffline出力の波形差が許容範囲であることを確認している
+- [x] base / distill の両weightをrevision固定で取得し、HF revisionと全weightのsha256を記録
+- [x] 8通りすべてで無音・NaN・途中切れのないwaveformを生成（base 7/7、distill 7/7）
+- [x] 同一seedで2回実行し差分を記録（下表）
+- [x] TTFA / RTF / peak VRAM のローカル基準値を `metrics.json` に記録
+- [x] streaming と offline の波形差を記録
+
+#### 実測基準値（この環境の基準。公式値との比較対象ではない）
+
+| checkpoint | streaming TTFA | RTF (streaming) | peak VRAM | model load |
+|---|---:|---:|---:|---:|
+| base | 251 ms | 1.89 | 2.04 GB | 44.4 s |
+| distill | 210 ms | 0.52 | 2.05 GB | 56.3 s |
+
+distill step sweep: steps=1 → RTF 0.262 / steps=2 → 0.328 / steps=4 → 0.470
+
+| 比較 | base tts | base voice_clone |
+|---|---:|---:|
+| 再現性（run1 vs run2） | max_abs 2.38e-04 | **完全一致** |
+| streaming vs offline | max_abs 8.37e-04 | **完全一致** |
+
+**tts経路は再現性がない**（2.4e-04）。今後checkpointの差を波形で判定する際の**ノイズ下限**になる。
+
+#### 環境固有の落とし穴（重要）
+
+WindowsのPyTorchには **triton が同梱されない**ため、`torch.compile` を使う sampler
+（`set_sampler_compile_mode("full-sampler")`）が失敗し、**distillは当初7ケース全滅した**。
+`triton-windows` の導入と `--sampler-compile-mode auto` で解消。
+現在も compile mode は `eager` で動いており、RTFが公式報告値より高い一因になっている。
 
 ### 作業
 
@@ -154,9 +178,20 @@ CLIにはこの計測がないため、streaming計測は `generate_stream()` �
 - [x] dataset単位の棚卸し表が存在する
 - [x] S0（10〜30h）、S1（100〜500h）、S2（1,000h）に投入する候補datasetが指名されている（D-017）
 - [x] 権利の確認が完了している（D-014）
-- [ ] 「raw hours」と「accepted hours」が分離して集計されている
-      — **除外条件は確定済み**（下表）だが、実適用はP1dのvalidator実行後
+- [x] 「raw hours」と「accepted hours」が分離して集計されている（下表）
 - [ ] checkpointを公開するか内部利用に限定するかの方針が仮決定されている（R-009の残件）
+
+#### accepted hours の実測（全7,405,094行に D-016 を適用）
+
+| | 発話数 | 時間 | 話者ID |
+|---|---:|---:|---:|
+| raw | 7,405,094 | 10,654.3 h | 19,349 |
+| **accepted** | **6,916,974** | **10,466.4 h** | **18,279** |
+| excluded | 488,120 | 187.9 h（**1.8%**） | 1,070 |
+
+除外内訳: too_short 324,890 / punctuation_only 181,486 / generic_speaker 37,314 /
+markup 4,543 / empty_text 1,055 / too_long 340 / name_placeholder 252。
+**S3の目標（3,000〜10,000時間）はacceptedだけで満たせる。**
 
 ### 確定した除外条件（実測値つき・D-016）
 
@@ -196,13 +231,26 @@ CLIにはこの計測がないため、streaming計測は `generate_stream()` �
 選択肢は[02-continual-training-strategy.md](02-continual-training-strategy.md) 第4節の3分岐:
 既存Tokenizerを維持 / 既存token ID互換のvocabulary拡張 / reading・G2Pを入力へ追加。
 
-### ゴール
+### 状態: 完了（2026-08-30）
 
-- [ ] 数千文以上の固定corpusに対し、02章T0の全項目を測定したreportがある
-      （`<unk>` 率、文字あたりtoken数、token長P50/P95/P99、文字種別coverage、
-      正規化前後差、固有名詞・数字・URL等の分割、special token衝突）
-- [ ] 上記3分岐のいずれかが、**実測値と理由つきで**選択されている
-- [ ] 選択した方針で、S0の入力テキスト形式（raw / normalized / +reading）が確定している
+- [x] gol実テキスト 200,000文 / 5,594,489 token で T0 の全項目を測定
+- [x] 分岐1（既存Tokenizer維持）を実測値と理由つきで選択（D-018）
+- [x] S0の入力テキスト形式を raw text に確定（D-008）
+
+| 指標 | 実測 |
+|---|---:|
+| 文単位 / token単位 `<unk>` 率 | **0.0000% / 0.0000%** |
+| **byte-fallback token率** | **9.658%** |
+| **byte-fallbackを含む文** | **45.64%** |
+| tokens per char | 1.1381 |
+| token長 P50 / P95 / P99 | 25 / 58 / 75 |
+| NFKCでtoken数が変わる文 | 2.357% |
+| 実効text予算（ref 30秒） | 10,012 token ≒ 8,797 文字 |
+
+**`<unk>` が0なのは256個のbyte-fallbackピースが受けているため**で、日本語をよく
+表現できているからではない。小書き仮名15字種・漢字643字種・カタカナ18字種が
+単一ピースを持たない。→ 既存Tokenizerで開始可、**互換拡張の価値は高い**。
+詳細は [02章 §4](02-continual-training-strategy.md)。
 
 ### 作業
 
@@ -244,14 +292,25 @@ vocabulary拡張を選ぶ場合、SentencePiece modelの差し替えだけでは
 公式Audio VAE（24 kHz、12.5 Hz、64-dim）をfreezeしたまま日本語へ進んでよいかを判断する。
 TTS本体の問題とVAEの問題を、学習を始める前に分離する。
 
-### ゴール
+### 状態: 完了（2026-08-30）
 
-- [ ] 話者・収録環境・音韻条件を分散させた日本語評価subset（[06章](06-evaluation-plan.md) 第2節の入力条件）が固定されている
-- [ ] original と reconstruction について、mel距離・ASR CER差・話者embedding類似度・
-      自動品質指標が測定されている
-- [ ] 促音・撥音・長音・無声化を含む発話で、音韻情報の系統的欠落がないことを
-      日本語話者の聴取で確認している
-- [ ] 「VAEをfreezeして進める」か「S4（Japanese VAE）を検討する」かが決定されている
+- [x] f0 101〜473 Hz に分散した10話者の日本語評価subsetを固定
+- [x] mel距離・ASR CER差・話者embedding類似度を測定
+- [ ] **日本語話者による聴取は未実施**（自動指標のみ）
+- [x] 「VAEをfreezeして進める」を決定（D-003確定、S4は見送り）
+
+| 指標 | 実測 |
+|---|---:|
+| speaker cos類似度（80発話 / 10話者） | mean **0.9392** / min 0.8643 |
+| SNR | mean 9.27 dB |
+| log-mel L1 | mean 0.651 |
+| latent frame rate | 12.589 Hz（仕様12.5） |
+| **CER差（reconstruction − original）** | **+0.58 pt** |
+| **original ASR vs reconstruction ASR** | **mean 2.21% / P50 0.00%** |
+
+**中央値0.00%は「半数の発話がVAE往復後も完全に同一の転写になる」ことを意味する。**
+ASRは `kotoba-tech/kotoba-whisper-v2.0` に固定（D-019）。
+未実施: PESQ / STOI / UTMOS、聴取評価、促音・撥音に特化した固定subset。
 
 ### 作業
 
@@ -286,16 +345,42 @@ streaming decode経路（`vae.streaming_decode()`）でも同じ入力を通し�
 
 学習と評価が同じ入口を共有し、reference/target leakageを構造的に防げる状態を作る。
 
-### ゴール
+### 状態: 完了（2026-08-30）
 
-- [ ] JSONL schema（[03章](03-data-and-frontend.md) 第2節）が確定し、validatorが全recordを検証できる
-- [ ] `train / dev-seen / test-seen / dev-zero-shot / test-zero-shot / text-challenge /
-      vae-reconstruction` のsplitが生成され、zero-shot splitが **voiceクラスタ単位で**
-      disjointであることをテストで確認している（speaker IDは声の識別子ではないため、
-      ID単位のdisjointでは不十分）
-- [ ] reference/target pairが同一utterance・同一録音の近重複を選ばないことをテストで確認している
-- [ ] 固定評価set（日本語challenge text、英語・中国語のforgetting用subset）が学習から除外されている
-- [ ] manifest versionとchecksumが記録され、小規模subsetを同じpipelineで再生成できる
+- [x] JSONL schemaを確定し、validatorが全recordを検証（`cutetts.training.manifest`）
+- [x] split生成、zero-shot話者のtrain重複 **0件** をテストで確認
+- [x] PairSampler 100ペアで **leakage 0件**、平均reference 9.61秒
+- [x] manifest checksumを記録（`artifacts/p1d/*/metrics.json`）
+- [ ] 固定評価set（text-challenge、英語・中国語のforgetting用）は未作成
+
+#### voiceクラスタリングの較正（D-015）— 既定値は使えない
+
+| 分布 | mean | P5 | P50 | P95 | P99 | max |
+|---|---:|---:|---:|---:|---:|---:|
+| 話者内 cos | 0.825 | **0.608** | 0.861 | — | — | — |
+| 話者間 cos | 0.540 | — | 0.586 | **0.837** | 0.883 | 0.959 |
+
+**話者内P5が話者間P95を下回り、両分布が大きく重なる。** 単連結は連鎖しやすく、
+既定の t=0.70 では77話者中62が1クラスタへ併合された。
+
+| 閾値 | クラスタ数 | 複数話者クラスタ | 最大 |
+|---:|---:|---:|---:|
+| 0.70 | 15 | 2 | 62 |
+| **0.92** | **71** | **5** | **3** |
+| 0.95 | 76 | 1 | 2 |
+
+**採用: t = 0.92。** leakage防止では過剰併合が安全側（併合しすぎても学習話者が減るだけだが、
+併合し損ねるとzero-shot splitに同じ声が漏れる）。
+
+#### R-004 が実データで確認された
+
+| cos | 話者A | 話者B |
+|---:|---|---|
+| 0.9594 | gol | gol（別ID） |
+| **0.9299** | **gol** | **moe** ← dataset跨ぎの同一声 |
+
+**dataset単位でsplitを分けても声は漏れる。** 現在のsplitはvoiceクラスタ確定前の暫定
+（speaker_id単位）なので、`data/manifests/all_clustered.jsonl` で作り直すこと。
 
 ### 成果物
 
@@ -386,15 +471,36 @@ Speaker Encoderは16 kHz入力、Audio VAEは24 kHz入力なので、**リサン
 Pass Aで手順とcache形式を固めてからPass Bを流します。
 Pass Bを走らせる前に、Pass Aの実測からI/O時間とGPU時間を見積もります。
 
-### ゴール
+### 状態: Pass A完了（2026-08-30）。Pass BはS2直前まで実施しない
 
-- [ ] Pass Aが完了し、latent cacheとspeaker embedding cacheが生成されている
-- [ ] cacheに VAE checkpoint revision / preprocessing version / source checksum が記録され、
-      不一致のcacheをloadすると例外になる
-- [ ] 同じwaveformから2回生成したlatentが一致する
-- [ ] 1 tarあたりの所要時間（download / resample / encode）が実測され、
-      Pass Bの総時間が見積もれている
-- [ ] 元音声をローカルに常駐させずに完走できることが確認されている
+- [x] Pass A完了。latent cache と speaker embedding cache を生成
+- [x] cacheに checksum / preprocessing version を記録し、不一致で `CacheMetaMismatch`
+- [x] 再開機能を確認（2回目の実行で既存300発話をスキップ）
+- [x] Pass Bの総時間を見積もり
+- [x] 元音声を常駐させず、書庫1本ずつで完走
+
+| 指標 | 実測（6,112発話 / 8.13 h） |
+|---|---:|
+| スループット | **44.5× realtime** |
+| latent frame rate | 12.599 Hz（仕様12.5） |
+| peak VRAM | **2.48 GB** |
+| 失敗 | **0件** |
+
+#### gol全体（10,654 h）への外挿
+
+| | 実測外挿 | 計画見積 |
+|---|---:|---:|
+| latent cache | **65.3 GB** | 61 GB |
+| 所要 | **239 GPU時間** | — |
+
+計画の `12.5 Hz × 64次元 × 2 byte = 1600 B/s → 61 GB` が実データで裏づけられた。
+**239 GPU時間はPass Bをクラウド（vast.ai）で回す際の費用見積の基礎。**
+
+#### Pass B を今やらない理由
+
+accepted データは確定したが、**voiceクラスタの閾値0.92は77話者での較正値**であり
+Pass B規模（数千話者）では再較正が必要。先にP2を作り、S0で必要なデータ規模を
+見極めてからの方が無駄がない。
 
 ### 成果物
 

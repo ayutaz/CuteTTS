@@ -19,22 +19,26 @@
 
 ### 完了
 
-- forkをローカルへclone済み
-- `main` から `feat/japanese-training` ブランチを作成済み
-- 先行会話、ローカル実装、公式README、論文v2、公開checkpoint構成を調査済み
-- 日本語データの確定（gol-dataset 10,654 h / moe-speech-plus 621 h）と利用条件の解決。
-  実測値は [データ棚卸し](data-inventory.md) を参照
+- forkをローカルへclone、`feat/japanese-training` ブランチで作業
+- 計画文書の整備（01〜08 + データ棚卸し）
+- **P0: 推論ベースライン再現**（`gate_passed: true`。base 7/7、distill 7/7）
+- **P1a: データ実態調査**（accepted **10,466.4 h** / 18,279話者ID を確定）
+- **P1b: Tokenizer coverage**（`<unk>` 0%、byte-fallback 9.66% → 既存Tokenizerで開始可）
+- **P1c: Audio VAE 日本語再構成**（CER差 +0.58pt → **freeze確定**、Stage 4見送り）
+- **P1d: manifest / split / voiceクラスタ**（t=0.92 較正、leakage 0件）
+- **P1e: 前処理パス Pass A**（6,112発話、外挿 65.3 GB / 239 GPU時間）
+- 実装: `src/cutetts/training/` 7モジュール + `scripts/` 5本、**テスト354件PASS**
+
+数値の一覧は [P0/P1 実測結果まとめ](RESULTS.md) を参照。
 
 ### 未実施
 
-- 公式checkpointのローカル推論ベースライン（**現在のボトルネック**。weight取得が
-  Tokenizer調査・VAE評価・前処理パスすべての前提）
-- 公式Tokenizerの日本語coverage測定
-- 公式Audio VAEによる日本語再構成評価
-- 日本語metadataの実データ検証
-- 学習用forward、loss、packing、trainerの実装
-- 日本語のoverfit test、PoC、継続学習
-- 日本語モデルの主観・客観評価
+- **P2: 学習forward復元**（flow-matching loss、stop target、packing、trainer）← 次はここ
+- P1e Pass B（gol全体7 TB。S2直前まで実施しない）
+- Stage 0以降の日本語学習と評価
+- 固定評価set（text-challenge、英語・中国語のforgetting用）
+- 日本語母語話者による主観評価
+- モデル公開範囲の決定（R-009の残件）
 
 ## 読み方
 
@@ -58,7 +62,8 @@
 7. [リスク、意思決定、未解決事項](07-risks-and-decisions.md)
 8. [対応計画（実行フェーズ定義）](08-execution-plan.md)
 9. [データ棚卸し](data-inventory.md)
-10. [一次資料](references.md)
+10. [P0/P1 実測結果まとめ](RESULTS.md)
+11. [一次資料](references.md)
 
 ## 現時点の要約
 

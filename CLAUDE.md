@@ -127,24 +127,56 @@ LMのtoken rateは `12.5 / 2 = 6.25 patch/s`。`--max-decode-length 750` は約1
 
 ## 日本語継続学習プロジェクト（docs/japanese-training/）
 
-README → 01〜07（背景・方針・設計）→ 08（実行計画）→ references の順で読む。
-**実作業に入る前に読むべきは `08-execution-plan.md`**。各フェーズの目的・ゴール（完了条件）・
-成果物・判断ゲートが定義されており、05のロードマップを実行単位へ落としたもの。
+**まず読むべきは [`docs/japanese-training/RESULTS.md`](docs/japanese-training/RESULTS.md)**（P0/P1の実測値一覧）と
+[`08-execution-plan.md`](docs/japanese-training/08-execution-plan.md)（フェーズ定義とゴール）。
+背景は README → 01〜07、データは data-inventory.md。
 
-文書は情報を **確認済み / 決定済み / 提案 / 未確定** の4状態で区別して書く規約がある。
-新しい記述を追加するときもこの区別を維持し、「実装した」と「日本語学習が成功した」を混同しない。
-07の意思決定表（D-001〜D-012）は項目を削除せず、状態と理由を追記して更新する。
+文書は情報を **確認済み / 決定済み / 提案 / 未確定** の4状態で区別する規約がある。
+「実装した」と「日本語学習が成功した」を混同しないこと。
+07章の意思決定表（D-001〜D-024）は項目を削除せず、状態と理由を追記して更新する。
 
-進め方（05-experiment-roadmap.md）:
-`P0 公開baseの推論再現` → `P1 日本語preflight（Tokenizer coverage / VAE reconstruction / manifest）`
-→ `P2 training forward復元` → `Stage 0 (10〜30h overfit)` → `Stage 1 (100〜500h)` →
-`Stage 2 (1,000h)` → `Stage 3 (3,000〜10,000h)` → `Stage 4 JA VAE（条件付き）` → `Stage 5 distill`。
-各段階にexit gateがあり、checkpoint・config・seed・manifest checksum・評価artifactが揃って完了。
+### 進捗（2026-08-30）
 
-初期方針: Audio VAEとSpeaker Encoderはfreeze、text embedding / Patch Encoder / backbone /
-Diffusion Head / Stop Predictorをtrain、full fine-tuningが主案（すべて「提案」であり実験で再判定）。
+**P0 と P1 は完了。次は P2（学習forward復元）。**
 
-未実装で、実装する場合に仕様を自分で確定する必要がある箇所（04章）:
-flow-matching loss（`x_t = (1-t)ξ + tP`、target velocity `P - ξ`、`t = sigmoid(u), u~N(0,1)`）、
-stop targetの位置とmask、sequence packingのattention遮断、condition dropout、latent cache、
-checkpoint resume。stop loss周りは論文にも規定がなく、推論側の停止挙動と一致するテストが必須。
+| フェーズ | 状態 | 主要な結論 |
+|---|---|---|
+| P0 | 完了 | `gate_passed: true`。base/distill 各7/7 |
+| P1a | 完了 | accepted **10,466.4 h** / 18,279話者ID（除外1.8%） |
+| P1b | 完了 | `<unk>` 0%だが byte-fallback が token 9.66% / 文45.6% → 既存Tokenizerで開始可（D-018） |
+| P1c | 完了 | CER差 +0.58pt、往復CER中央値0.00% → **VAE freeze確定**（D-003）、Stage 4見送り |
+| P1d | 完了 | voiceクラスタ **t=0.92**（既定0.70は破綻）、leakage 0件 |
+| P1e | Pass A完了 | 44.5× realtime、外挿 65.3 GB / **239 GPU時間**。Pass BはS2直前 |
+| P2 | **次はここ** | flow-matching loss / stop target / packing / trainer |
+
+### 実装済み
+
+```text
+src/cutetts/training/   artifacts, manifest, text_rules, pairing,
+                        latents, speaker_cache, voice_clusters
+scripts/                reproduce_baseline, analyze_japanese_tokenizer,
+                        evaluate_japanese_vae, prepare_japanese_manifest,
+                        cache_audio_latents, build_voice_clusters
+tests/training/         354件 PASS
+```
+
+実行手順は `.claude/skills/cutetts-ja-pipeline/SKILL.md` にまとめてある。
+
+### 絶対に守ること
+
+- **ローカルGPUを使う処理は実行前にユーザーへ確認する**（D-023）。
+  バックグラウンド実行でも同じ。所要時間やVRAMが小さいことは省略の理由にならない。
+  GPUジョブを並列起動しない（1本ずつ直列）。
+- **`artifacts/` 配下の音声をコミット・公開しない**。MoeSpeech LICENSEは
+  「音声ファイルを1つであっても公開することは再配布とみなす」と規定している。
+- **話者IDを匿名化として扱わない**。golのIDは `SHA-256(表示名)[:32]` で辞書攻撃可能。
+- 重いGPU処理は vast.ai へ回す（D-024）。起動前に費用見積もりを提示する。
+
+### P2で自分で決める必要がある箇所（04章）
+
+論文にもコードにも規定がない: padding patchのloss除外、packed境界のstop label、
+stop lossのclass imbalance対策、flow lossとstop lossの重み、condition dropoutの範囲。
+推論側の停止挙動と一致するテストが必須。
+
+一方、**推論コードから確定できる仕様**は08章P2の表にまとめてある（正規化後の潜在空間、
+stopラベルの位置、headのシグネチャ、previous condの初期値）。推測で決めないこと。
