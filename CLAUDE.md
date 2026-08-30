@@ -147,7 +147,8 @@ LMのtoken rateは `12.5 / 2 = 6.25 patch/s`。`--max-decode-length 750` は約1
 | P1c | 完了 | CER差 +0.58pt、往復CER中央値0.00% → **VAE freeze確定**（D-003）、Stage 4見送り |
 | P1d | 完了 | voiceクラスタ **t=0.92**（既定0.70は破綻）、leakage 0件 |
 | P1e | Pass A完了 | 44.5× realtime、外挿 65.3 GB / **239 GPU時間**。Pass BはS2直前 |
-| P2 | **次はここ** | flow-matching loss / stop target / packing / trainer |
+| P2 | 完了 | ゴール7件達成。変異テスト9/9検出。すべてCPUで検証 |
+| S0 | **次はここ** | GPUが要る。ローカルではなく vast.ai を使う（D-023/D-024） |
 
 ### 実装済み
 
