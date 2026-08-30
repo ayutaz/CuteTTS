@@ -122,16 +122,42 @@
 
 ### R-007: GPU規模の見積もり誤り
 
+**2026-08-30更新: 実機が判明。計画の想定より小さい。**
+
+| 項目 | 05章の想定 | 実機 |
+|---|---|---|
+| 開発PoC GPU | RTX 4090 24 GB | **RTX 4070 Ti SUPER 16 GB** |
+| ストレージ空き | 未記載 | C: 3.2 TB / D: 1.5 TB |
+
+VRAMが想定の2/3しかないため、D-006（full fine-tuning を主案とする）は
+S0のmicrobatch実測で早期に再判定する必要があります。
+gol-dataset全体（7 TB）のダウンロードは容量的には可能です。
+
 影響:
 
 - 大規模GPU契約後にthroughput不足
 - optimizer/activation/I/Oがボトルネック
+- **16 GBでfull fine-tuningが載らない場合、部分freezeまたはLoRAへ切り替える**
 
 対策:
 
 - training forward完成後にmicrobatch benchmark
 - 1 GPUでmemory breakdown
 - distributed scalingを短時間runで測る
+- P1eの前処理パスで、まずVAE encode + Speaker Encoderの実VRAM使用量を測る
+
+### R-011: 実行環境の再現性
+
+**2026-08-30追加。**
+
+システム既定のPythonは3.14で、**torch 2.5.1 が対応していない**（3.9〜3.12のみ）。
+このリポジトリの作業は `.venv`（Python 3.12 + torch 2.5.1+cu121）で行う必要があります。
+
+対策:
+
+- 実行コマンドは `.venv/Scripts/python.exe` を使う
+- `artifacts/*/env.json` にpython / torch / GPU / cutetts commitを必ず記録する
+  （`cutetts.training.artifacts.env_snapshot`）
 
 ### R-008: Streaming品質の回帰
 

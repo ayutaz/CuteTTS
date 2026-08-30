@@ -29,6 +29,12 @@ dependencies = [
   "uvicorn[standard]>=0.34,<1",
 ]
 
+[project.optional-dependencies]
+dev = [
+  "pytest>=8,<10",
+  "pyyaml>=6,<7",
+]
+
 [project.scripts]
 cutetts = "cutetts.cli:main"
 cutetts-demo = "cutetts.web_demo:main"
@@ -41,3 +47,7 @@ cutetts = ["demo/static/*"]
 
 [tool.setuptools.data-files]
 "share/cutetts" = ["assets/default_reference.wav"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

@@ -44,9 +44,26 @@ cutetts --model-dir ./model/CuteTTS-distill --mode voice_clone \
 cutetts-demo --model-dir ./model --device auto --host 127.0.0.1 --port 7860
 ```
 
-test / lintは **未整備**。pyprojectにdev依存もlint設定もなく、さらに `.gitignore` が `tests/` を
-除外しているため、`docs/japanese-training/04-training-implementation.md` が計画する `tests/training/`
-を追加する際は **先に .gitignore から `tests/` を外す** 必要がある。
+### このマシンでの実行環境（重要）
+
+システム既定のPythonは3.14で **torch 2.5.1 が動かない**（対応は3.9〜3.12）。
+日本語学習側の作業はリポジトリ直下の `.venv`（Python 3.12 + torch 2.5.1+cu121）で行う。
+
+```bash
+.venv/Scripts/python.exe -m pytest tests/training -v   # テスト
+.venv/Scripts/python.exe scripts/<name>.py --config configs/japanese/<name>.yaml
+```
+
+GPUは RTX 4070 Ti SUPER 16 GB（05章が想定した4090 24GBより小さい。R-007参照）。
+
+### テスト
+
+`pyproject.toml` に `[project.optional-dependencies] dev`（pytest / pyyaml）と
+`[tool.pytest.ini_options]` を追加済み。`.gitignore` の `tests/` 除外も解除済みなので、
+`tests/training/` はgit管理される。lint設定は引き続き未整備。
+
+`model/`、`artifacts/`、`data/` はgitignore。**`artifacts/` 配下の音声は学習データの
+ライセンス上、公開・コミットしてはならない**（08章「artifactの公開制限」）。
 
 ## アーキテクチャ
 
