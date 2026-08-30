@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "c=$(jq -r \".tool_input.command // \\\"\\\"\"); if printf \"%s\" \"$c\" | grep -qiE \"reproduce_baseline|evaluate_japanese_vae|cache_audio_latents|build_voice_clusters|torch\\.cuda|--device[ =]*cuda|CuteTTS\\.from_pretrained|AudioAcousticVAEAdapter|FbankECAPAStudent\"; then jq -nc \"{hookSpecificOutput:{hookEventName:\\\"PreToolUse\\\",permissionDecision:\\\"ask\\\",permissionDecisionReason:\\\"このコマンドはローカルGPU(RTX 4070 Ti SUPER 16GB)を使う可能性があります。実行前にユーザーへ確認し、所要時間とVRAMの見積もりを伝えてください。GPUジョブは並列起動せず1本ずつ。重い処理はvast.aiへ回す選択肢も示すこと（docs/japanese-training/07-risks-and-decisions.md D-023/D-024）。\\\"}}\"; fi",
+            "command": "c=$(jq -r \".tool_input.command // \\\"\\\"\"); if printf \"%s\" \"$c\" | grep -qiE \"reproduce_baseline|evaluate_japanese_vae|cache_audio_latents|build_voice_clusters|torch\\.cuda|--device[ =]*cuda|CuteTTS\\.from_pretrained|AudioAcousticVAEAdapter|FbankECAPAStudent\"; then jq -nc \"{systemMessage:\\\"[GPU] このコマンドはローカルGPU(4070 Ti SUPER 16GB)を使います。事前確認を取りましたか？ 未確認なら中断してください（D-023）。\\\",hookSpecificOutput:{hookEventName:\\\"PreToolUse\\\",permissionDecision:\\\"ask\\\",permissionDecisionReason:\\\"ローカルGPUを使う可能性があります。実行前にユーザーへ確認し、所要時間とVRAMの見積もりを伝えてください。GPUジョブは並列起動せず1本ずつ。重い処理はvast.aiへ回す選択肢も示すこと（D-023/D-024）。\\\"}}\"; fi",
             "timeout": 10,
             "statusMessage": "ローカルGPU使用をチェック中"
           }
