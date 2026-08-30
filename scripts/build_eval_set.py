@@ -78,6 +78,32 @@ PHONETIC = [
 PHONETIC = [t for t in PHONETIC if re.search(r"[ぁ-んァ-ヶ一-龥]", t)]
 
 
+def has_lexical_content(text: str) -> bool:
+    """語彙的内容を持つ文か。**CERを一切参照せず、テキストの性質だけで判定する。**
+
+    visual novel のテキストには、言語内容を持たない感情表現が混ざる
+    （例: `ふあぁぁぁぁっ、あぁぁ、ああぁぁぁ！`）。
+    これを評価文に入れると、ASR転写を比べても TTS の品質を測れない。
+    ゲートを歪めるので除外する。
+
+    除外条件（すべてテキストのみから決まる）:
+
+    * 同一文字が4回以上連続する（`ぁぁぁぁ`、`ああああ`）
+    * 異なり文字の比率が 0.45 未満（語彙的多様性が低い）
+    * 漢字・カタカナが1文字も無い（ひらがなの嘆声だけ）
+    """
+    stripped = re.sub(r"[\s、。「」『』・…‥！？!?,.\-―ー~〜\"'()（）]", "", text)
+    if len(stripped) < 8:
+        return False
+    if re.search(r"(.){3,}", stripped):
+        return False
+    if len(set(stripped)) / len(stripped) < 0.45:
+        return False
+    if not re.search(r"[ァ-ヶ一-龥]", stripped):
+        return False
+    return True
+
+
 def pick_in_domain(metadata_tsv: Path, exclude_ids: set[str], *, count: int, seed: int,
                    scan_limit: int = 2_000_000) -> list[dict]:
     """gol の metadata.tsv から、学習に使わない発話を決定的に選ぶ。
@@ -108,6 +134,8 @@ def pick_in_domain(metadata_tsv: Path, exclude_ids: set[str], *, count: int, see
             if text_rules.has_name_placeholder(text):
                 continue
             if not re.search(r"[ぁ-んァ-ヶ一-龥]", text):
+                continue
+            if not has_lexical_content(text):
                 continue
             try:
                 seconds = float(duration)
@@ -161,12 +189,14 @@ def main() -> None:
     print(f"in_domain: {len(in_domain)} 文（{len({x['speaker_id'] for x in in_domain})} 話者）")
 
     payload = {
-        "version": 1,
+        "version": 2,
         "seed": args.seed,
         "created_for": "S0",
         "note": (
             "S0のゲート値を固定するための評価set。**結果を見てから変更しないこと。**"
             "in_domain は学習manifestに含まれない発話から、1話者1文で選んでいる。"
+            "v2: 語彙的内容を持たない感情表現（`ふあぁぁぁ`等）を除外した。"
+            "除外はテキストの性質のみで判定し、CERは一切参照していない。"
         ),
         "subsets": {
             "in_domain": in_domain,
