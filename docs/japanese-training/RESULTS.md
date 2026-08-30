@@ -214,6 +214,46 @@ packing / checkpointing）。**すべてCPUで検証**（縮小した実CuteTTSM
 speaker slot と target の対応付けが壊れる。unpacked では両者が一致するので
 **packingを書くまで露見しなかった**。
 
+## S0前段: 学習forwardのVRAM/throughput実測（2026-08-30、vast.ai RTX 3090）
+
+**R-007（GPU規模の見積もり誤り）とD-006（full fine-tuning主案）の再判定材料。**
+公開checkpointの実サイズ（228.6M）で測定。microbatch 1、flow copies 4、bfloat16。
+
+| 構成 | 学習パラメータ | t=32（5秒） | t=64（10秒） | t=128（20秒） | t=188（30秒） |
+|---|---:|---:|---:|---:|---:|
+| **full**（D-005主案） | 228.6M | 3.01 GB | 3.01 GB | 3.43 GB | **4.15 GB** |
+| freeze_patch_encoder | 198.7M | 2.77 GB | 2.77 GB | 3.25 GB | 3.94 GB |
+| lm_only | 197.4M | 2.76 GB | 2.76 GB | 3.24 GB | 3.94 GB |
+
+速度（full）: 100.4 / 108.4 / 142.0 / 189.6 ms/step。
+モデル常駐は 0.62 GB で、残りはactivationとoptimizer state。
+
+### 判定
+
+- **D-006（full fine-tuning）は成立する。** 30秒の発話でも 4.15 GB で、
+  24GBに対して大きな余裕がある
+- **D-005 は full を選んでよい。** Patch Encoder を freeze しても
+  節約は 0.2 GB（5%）、速度差はほぼゼロで、得られるものがない
+- **R-007 は解消。** 16GBのローカルGPUでも十分載る（4.15 GB）。
+  「VRAM不足で構成を見直す」事態は起きない
+
+### S0本番の費用見積もり（実測ベース）
+
+| 前提 | 値 |
+|---|---:|
+| GPU | RTX 3090 24GB @ $0.179/h（60GBディスク込みの実単価） |
+| step時間 | 約150 ms（平均発話長） |
+| 50,000 step | 約2.1時間 → **$0.38** |
+| latent cache生成込み | **$1〜2** |
+
+### この実行で見つかった実バグ
+
+`torch.randn(..., generator=cpu_generator, device='cuda')` が
+`Expected a 'cuda' device type for generator but found 'cpu'` を投げる。
+再現性のためCPU generatorを使いつつGPUで学習する構成では必ず踏む。
+**CPUだけのテストでは絶対に露見しない**種類の不具合で、
+vast.aiで実際に回したことで発見できた。
+
 ## 参考: 未学習baseの日本語CER（S0の基準線）
 
 日本語未学習のbase checkpointが、既に理解可能な日本語を生成する。
@@ -239,6 +279,7 @@ artifacts/p0/2026-08-30T16-05-00-distill/  distill（triton導入後、gate_pass
 artifacts/p1d/2026-08-30T16-35-00/         manifest + accepted hours
 artifacts/p1d-clusters/2026-08-30T17-05-00/ voiceクラスタ（t=0.92）
 artifacts/p1e/2026-08-30T16-45-00-passA/   前処理パス Pass A
+artifacts/s0-memory/2026-08-30T14-56-42/   VRAM/throughput実測（vast.ai RTX 3090）
 ```
 
 `artifacts/` と `data/` は gitignore 済み。

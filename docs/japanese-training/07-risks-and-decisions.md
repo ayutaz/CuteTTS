@@ -10,8 +10,8 @@
 | D-002 | distill checkpointを最初の起点にしない | 提案採用 | base適応後にdistillする方が分析しやすい |
 | D-003 | 初期はAudio VAEをfreeze | **確定** | P1c実測で支持。CER差 +0.58pt、original/reconstruction間CERの中央値0.00%、speaker cos 0.939（[02章 §7](02-continual-training-strategy.md)） |
 | D-004 | 初期はSpeaker Encoderをfreeze | 提案採用 | zero-shot SIMで再判定 |
-| D-005 | Patch Encoderをtrainする案を主案にする | 提案 | freeze variantとStage 0/1で比較 |
-| D-006 | 最初はfull fine-tuning | 提案 | VRAM・安定性・forgettingで再判定 |
+| D-005 | Patch Encoderをtrainする案を主案にする | **確定** | VRAM実測でfreezeの節約は0.2GB（5%）・速度差ほぼゼロ。freezeする理由がない |
+| D-006 | 最初はfull fine-tuning | **確定** | 30秒発話でも peak 4.15 GB。24GBに余裕、16GBでも載る（[RESULTS.md](RESULTS.md)） |
 | D-007 | 既存Tokenizerを先に測る | **完了** | P1b実測済み。`<unk>` 0%だがbyte-fallbackがtokenの9.66%・文の45.6%（[02章 §4](02-continual-training-strategy.md)） |
 | D-008 | Raw textから開始し、reading/accentを段階追加 | 提案採用 | 読み誤り分析で追加 |
 | D-009 | 日本語90〜95% + replay 5〜10% | 未確定 | 100%日本語との比較が必要 |
@@ -129,7 +129,17 @@
 
 ### R-007: GPU規模の見積もり誤り
 
-**2026-08-30更新: 実機が判明。計画の想定より小さい。**
+**2026-08-30更新: 実測により解消。VRAMは想定より遥かに少なくて済む。**
+
+学習forwardの実測（vast.ai RTX 3090、228.6M full fine-tuning、microbatch 1）:
+
+| target長 | peak VRAM |
+|---|---:|
+| 5秒 | 3.01 GB |
+| 30秒 | **4.15 GB** |
+
+**16GBのローカルGPUでも十分載る。** VRAMはボトルネックではなかった。
+残る制約はスループット（150 ms/step）とデータ量。
 
 | 項目 | 05章の想定 | 実機 |
 |---|---|---|
