@@ -220,6 +220,23 @@ gol-dataset全体（7 TB）のダウンロードは容量的には可能です�
 - 実行コマンドは `.venv/Scripts/python.exe` を使う
 - `artifacts/*/env.json` にpython / torch / GPU / cutetts commitを必ず記録する
   （`cutetts.training.artifacts.env_snapshot`）
+- Windowsでは `triton-windows` を導入する（D-022）。未導入だとdistillが全滅する
+
+### GPU確認フックの実効性（2026-08-30 検証）
+
+`.claude/settings.json` に PreToolUse フックを置き、GPUを使うコマンドで
+`permissionDecision: "ask"` を返すようにした。検証の結果:
+
+| 項目 | 結果 |
+|---|---|
+| フックが実行されるか | ○（センチネルで確認） |
+| `ask` を返すか | ○（GPUコマンドのみ。nvidia-smi参照やpytestは素通り） |
+| **確認プロンプトが出るか** | **×** |
+
+**セッションの権限モードが `ask` を素通りさせるため、フックだけでは歯止めにならない。**
+権限モードに依存しない `systemMessage` を併記したが、**一次的な歯止めは
+CLAUDE.md の D-023 と記憶（`confirm-before-local-gpu`）に置く**こと。
+フックは default モードでの補助と位置づける。
 
 ## 3. 未解決事項
 

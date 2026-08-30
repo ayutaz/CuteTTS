@@ -165,7 +165,7 @@ CLIにはこの計測がないため、streaming計測は `generate_stream()` �
 
 - [midralab/gol-dataset](https://huggingface.co/datasets/midralab/gol-dataset):
   10,654.32 h / 話者ID 19,349（実効 約2,000〜3,500）/ 7,405,094発話 / 7,019 GB /
-  48 kHz mono 32bit / **テキストはゲームスクリプト由来の正解** / visual novel domain
+  **44.1/48 kHz 混在** mono 32bit / **テキストはゲームスクリプト由来の正解** / visual novel domain
 - [ayousanz/moe-speech-plus](https://huggingface.co/datasets/ayousanz/moe-speech-plus):
   621.4 h / 473話者 / 395,170発話 / 152 GB / 44.1 kHz mono 16bit /
   **テキストはASR（2系統）** / NISQA + VAD 品質フィルタ済み / anime domain。
@@ -208,7 +208,7 @@ markup 4,543 / empty_text 1,055 / too_long 340 / name_placeholder 252。
 
 ### 残作業
 
-- 除外条件をvalidatorへ実装し、accepted hoursを確定する（P1dへ引き継ぎ）
+- ~~除外条件をvalidatorへ実装し、accepted hoursを確定する~~ 完了（上表）
 - モデル公開範囲の決定（R-009。S3のmodel card作成までに必要）
 
 ### 判断ゲート
@@ -522,7 +522,28 @@ P2側ではcacheのload側だけを扱います。
 推論専用の公開moduleから、最小のteacher-forced training stepを構成する。
 このフェーズの誤りは以降すべてのStageを無効にするため、**品質ではなく正しさ**だけを扱う。
 
+### 状態: 未着手。P1完了により前提はすべて揃っている（2026-08-30）
+
+**すぐ使える資産**
+
+| 用途 | 実体 |
+|---|---|
+| 学習sampleの入口 | `data/manifests/all_clustered.jsonl`（voice_cluster_id付き） |
+| latent | `data/cache/latents/`（`LatentCacheReader`、fp16、`[T,64]`） |
+| speaker embedding | `data/cache/speaker/`（`SpeakerEmbeddingCacheReader`、`[256]`） |
+| reference/target pair | `cutetts.training.pairing.PairSampler`（leakage検査つき） |
+| 除外ルール | `cutetts.training.text_rules`（D-016） |
+| run記録 | `cutetts.training.artifacts`（run/env/inputs/metrics） |
+
+**splitはvoiceクラスタ単位で作り直すこと。** `all.jsonl` のsplitはspeaker_id単位の暫定で、
+`all_clustered.jsonl` のクラスタを使って再生成する必要がある（D-015）。
+
+VRAM実測の基準: P1eのVAE encode + Speaker Encoderで peak 2.48 GB。
+学習forwardのVRAMは別物で、**P2の最後にmicrobatch 1で必ず実測する**（R-007）。
+16 GBに載らなければ D-006（full fine-tuning主案）を見直す。
+
 ### ゴール
+
 
 - [ ] deterministic tiny batchでloss値が再現する
 - [ ] 学習対象moduleにだけgradientが流れ、frozen VAE / Speaker Encoderには流れない
@@ -623,14 +644,33 @@ flow lossとstop lossの重み、condition dropoutが落とす条件の範囲。
 
 品質ではなく **可能性** の確認。既存VAEと日本語textから日本語音声が学習できるか。
 
+### 基準線（2026-08-30 実測）— ゲートはこの数値からの改善で判定する
+
+**日本語未学習のbase checkpointが、既に理解可能な日本語を生成する。**
+
+| 区分 | n | CER mean | median |
+|---|---:|---:|---:|
+| in-domain（gol会話文） | 8 | **29.6%** | 20.9% |
+| out-of-domain（数字・固有名詞） | 4 | **77.2%** | 84.7% |
+
+例: `そうだ！貴官のことも教えていただけませんか？` → `そうだ本番のことも教えていただけませんか`（CER 10.0%）
+
+したがって **「日本語音声が出る」はゲートにならない**。既に部分的に成立している。
+out-of-domain が in-domain の2.6倍悪いのは R-010（domain偏り）の裏づけ。
+
+注: 12文の小標本。**S0開始前に固定評価set（50文以上）で測り直し、その値をゲートに固定する。**
+測り直す前にゲートを緩めないこと。
+
 ### ゴール
 
-- [ ] target textに対応した日本語音声が生成される
+- [ ] 固定評価setでの基準線CERを測定し、ゲート値として固定している
+- [ ] **in-domain CERが基準線から明確に改善している**（音声が出るだけでは不可）
 - [ ] lossの低下だけでなく、聴取可能な発音改善がある
 - [ ] textを入れ替えると出力内容が追随する
 - [ ] referenceを入れ替えるとspeaker identityが追随する
 - [ ] 未学習文でも、完全なmemorizationではない挙動が確認できる
-- [ ] microbatch 1のpeak VRAMとthroughputが実測され、S1以降のGPU計画の根拠になっている
+- [ ] microbatch 1のpeak VRAMとthroughputが実測されている
+- [ ] **16 GBでfull fine-tuningが載るかを確認している**（載らなければD-006を見直す）
 
 ### 中止・巻き戻し条件
 
