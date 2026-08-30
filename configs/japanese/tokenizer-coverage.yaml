@@ -1,0 +1,78 @@
+# P1b: 日本語Tokenizer coverage 測定の設定
+#
+# docs/japanese-training/08-execution-plan.md の P1b と
+# docs/japanese-training/02-continual-training-strategy.md 第4節 (T0) に対応する。
+#
+# 実行:
+#   .venv/Scripts/python.exe scripts/analyze_japanese_tokenizer.py \
+#       --config configs/japanese/tokenizer-coverage.yaml
+#
+# 相対pathはrepository root基準で解決される。
+
+# 公式checkpointのtokenizerディレクトリ (tokenizer.model / added_tokens.json ...)
+tokenizer_dir: model/CuteTTS/tokenizer
+
+# processor.segment.max_length などを読むためのcheckpoint config
+model_config: model/CuteTTS/config.json
+
+corpus:
+  name: gol
+  # 列: game_id, speaker, text, file_path, duration (TSV, UTF-8, ヘッダあり)
+  path: data/raw/gol/metadata.tsv
+  format: tsv
+  text_column: text
+  encoding: utf-8
+  # null で全件走査 (7,405,094行)。件数を絞る場合はここに整数を入れる。
+  limit: null
+  # 1バッチあたりの行数 (SentencePieceのbatch encode単位)
+  batch_size: 50000
+  # 1.68GBのsha256は数分かかるため、既定ではsize+mtimeで代替する。
+  # true にすると inputs.json に実際のsha256を入れる。
+  checksum: false
+
+normalization:
+  # NFKC適用前後でtoken数・未知率がどう変わるかを測る
+  nfkc: true
+  # NFKC比較だけ件数を絞る場合の上限 (null = corpusと同じ件数)
+  limit: null
+
+budget:
+  # prepare_reference_audio (src/cutetts/runtime.py) の既定と揃える
+  reference_seconds: 30.0
+  # config.json の inference_defaults.max_decode_length
+  max_decode_length: 750
+  # 実効予算の算出に使う代表text (テンプレートのtoken境界差を見るため複数入れる)
+  probe_texts:
+    - こんにちは。
+    - 今日はいい天気ですね、散歩に行きましょう。
+    - 吾輩は猫である。名前はまだ無い。どこで生れたかとんと見当がつかぬ。
+
+# 既存special tokenがcorpus本文に出現するか (衝突検査)
+special_tokens:
+  - <|im_start|>
+  - <|im_end|>
+  - <|endofprompt|>
+  - <unk>
+  - <s>
+  - </s>
+  - <pad>
+
+# 3分岐の自動判定しきい値 (report.md の推奨はこの規則で決まる)
+#   1: 既存Tokenizer維持 / 2: 互換vocabulary拡張 / 3: reading・G2P追加入力
+decision:
+  # 文字単位の <unk> 率の上限
+  unk_char_rate_max: 0.0005
+  # 文字単位の byte fallback 率の上限 (SentencePieceがbyte分解した文字の割合)
+  fallback_char_rate_max: 0.01
+  # 平均 token / 文字 の上限
+  tokens_per_char_max: 1.6
+  # text token の P99 が実効予算のこの割合を超えたら警告
+  p99_budget_ratio_max: 0.5
+
+output:
+  root: artifacts
+  phase: p1b
+  # unk_samples.txt に残す実例の最大件数
+  sample_limit: 200
+  # 進捗表示の間隔 (行)
+  progress_interval: 500000

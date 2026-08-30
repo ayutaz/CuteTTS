@@ -1,0 +1,72 @@
+# P1c: 公式Audio VAEの日本語再構成評価
+#
+# docs/japanese-training/08-execution-plan.md の P1c と
+# docs/japanese-training/06-evaluation-plan.md 第2節に対応する設定。
+#
+#   .venv/Scripts/python.exe scripts/evaluate_japanese_vae.py \
+#     --config configs/japanese/vae-reconstruction.yaml
+#
+# path は絶対pathでなければ repository root からの相対pathとして解決する。
+
+phase: p1c
+
+# 話者・発話の選択はこのseedだけで決まる（同じzip集合なら再現する）。
+seed: 20260830
+
+# auto / cuda / cpu / cuda:0 …。auto は cutetts.runtime.resolve_device に従う。
+device: auto
+
+checkpoints:
+  audio_vae: model/CuteTTS/weights/audio_vae
+  speaker_encoder: model/CuteTTS/weights/speaker_encoder
+  # 学習側の潜在正規化 (latent + bias) * scaling を確認するためだけに読む（scalarのみ）。
+  # null にすると正規化後の統計を出さない。
+  tts_weights: model/CuteTTS/weights/tts/model.safetensors
+
+data:
+  # moe-speech-plus の話者zip置き場。壊れているzip（DL途中）は自動でskipして記録する。
+  moe_zip_dir: data/raw/moe
+  # 使う話者zipの上限（sorted順に先頭から）。存在する数がこれ未満なら存在する分だけ。
+  max_speakers: 16
+  utterances_per_speaker: 12
+  # 極端に短い/長い発話は別問題（VAE以外の要因）になるので除外する。
+  min_duration_sec: 1.0
+  max_duration_sec: 20.0
+  # 発話長bucketの境界[s]。stratified samplingと集計の両方に使う。
+  # moe-speech-plusは2秒未満の発話を含まない（実測: 全話者でmin >= 2.0s）ため、
+  # lt2 bucketは空になる。空bucketは集計から落ちる（reportに最短bucketを明記する）。
+  duration_bucket_edges_sec: [2.0, 3.0, 5.0, 8.0]
+
+metrics:
+  # multi-resolution log-mel（24 kHz基準）
+  mel_resolutions:
+    - {n_fft: 512, hop_length: 128, n_mels: 64}
+    - {n_fft: 1024, hop_length: 256, n_mels: 80}
+    - {n_fft: 2048, hop_length: 512, n_mels: 128}
+  # スペクトル収束（magnitude STFT）用
+  stft_n_fft: 1024
+  stft_hop_length: 256
+  # streaming decodeの1チャンクあたりlatent frame数。
+  # 推論は1 patch = locenc_patch_size = 2 frame ずつ流すので既定も2。
+  streaming_chunk_latent_frames: 2
+
+samples:
+  # artifacts/p1c/<ts>/samples/ に残す original/reconstruction ペアの上限。
+  # samples/ は音声そのものなので **公開禁止**（MoeSpeech LICENSE）。
+  max_pairs: 20
+  # 促音・撥音・長音を含む発話を優先して残す（人手聴取のため）。
+  prefer_phonetic_marks: true
+
+# 判定閾値。すべて「提案」であり、実測後に 07-risks-and-decisions.md の D-003 / R-003 へ反映する。
+thresholds:
+  # 全体のmulti-resolution log-mel L1平均の上限
+  mel_l1_max: 1.0
+  # original vs reconstruction のspeaker embedding cosine平均の下限
+  speaker_cosine_min: 0.85
+  # streaming decode と offline decode の一致（SNR[dB]）の下限
+  streaming_snr_db_min: 40.0
+  # 最短bucketのmel L1 / 全体のmel L1 の上限（短い発話だけ壊れていないか）
+  short_utterance_mel_ratio_max: 1.5
+
+output:
+  artifact_root: artifacts
