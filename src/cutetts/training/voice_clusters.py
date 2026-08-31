@@ -54,9 +54,9 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import dataclass
-from typing import Iterable, Iterator, Protocol
+from typing import Iterable, Iterator, Protocol, Sequence
 
 import numpy as np
 
@@ -64,6 +64,11 @@ from cutetts.training.manifest import Utterance
 
 __all__ = [
     "DEFAULT_CLUSTER_THRESHOLD",
+    "DEFAULT_MAX_ZERO_SHOT_SHARE",
+    "DEFAULT_SEEN_FRACTION",
+    "DEFAULT_ZERO_SHOT_FRACTION",
+    "assign_splits_by_cluster",
+    "split_leakage",
     "DEFAULT_DISPERSION_THRESHOLD",
     "DEFAULT_MAX_SAMPLES_PER_SPEAKER",
     "SPEAKER_EMBEDDING_DIM",
@@ -472,3 +477,107 @@ def cluster_summary(mapping: dict[str, str]) -> dict:
         "speakers_in_multi_speaker_clusters": sum(size for size in sizes.values() if size >= 2),
         "size_histogram": {str(size): count for size, count in sorted(histogram.items())},
     }
+
+
+# ------------------------------------------------------- クラスタ単位のsplit
+
+DEFAULT_ZERO_SHOT_FRACTION = 0.12
+DEFAULT_SEEN_FRACTION = 0.05
+DEFAULT_MAX_ZERO_SHOT_SHARE = 0.05
+"""1クラスタがzero-shot splitへ持ち込める発話数の上限（全体に対する割合）。
+
+単連結クラスタリングは連鎖で巨大クラスタを作ることがある（S1では45話者・
+90.7時間・全体の28%が1クラスタになった）。それがzero-shotへ落ちると
+split構成が壊れるため、大きすぎるクラスタはtrain側へ固定する。
+"""
+
+
+def _bucket(seed: int, key: str) -> float:
+    """seedとキーから [0,1) の決定的な値を作る。"""
+    digest = hashlib.sha256(f"{seed}:{key}".encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], "big") / 2**64
+
+
+def assign_splits_by_cluster(
+    cluster_ids: Sequence[str],
+    *,
+    seed: int,
+    zero_shot_fraction: float = DEFAULT_ZERO_SHOT_FRACTION,
+    seen_fraction: float = DEFAULT_SEEN_FRACTION,
+    max_zero_shot_share: float = DEFAULT_MAX_ZERO_SHOT_SHARE,
+) -> list[str]:
+    """発話ごとの ``voice_cluster_id`` 列から split を決める。
+
+    **1つのクラスタは必ず1つのsplitにだけ現れる。** speaker_id単位で切ると
+    「別IDの同じ声」がtrainとzero-shotへ分かれ、zero-shotがzero-shotで
+    なくなる（D-015）。S1の実データでは 21クラスタ・73,001発話（37.1%）が
+    この漏れに該当していた。
+
+    Args:
+        cluster_ids: 発話と同じ並びの ``voice_cluster_id``。
+        seed: 決定的な割り当てのためのseed。
+        zero_shot_fraction: zero-shotへ回すクラスタの割合（dev/testで折半）。
+        seen_fraction: train クラスタ内で seen 評価へ回す発話の割合。
+        max_zero_shot_share: 1クラスタがzero-shotへ持ち込める発話数の上限
+            （全体に対する割合）。これを超えるクラスタはtrainへ固定する。
+
+    Returns:
+        ``cluster_ids`` と同じ長さの split 列。
+
+    Raises:
+        ValueError: 割合が範囲外のとき。
+    """
+    for name, value in (("zero_shot_fraction", zero_shot_fraction),
+                        ("seen_fraction", seen_fraction),
+                        ("max_zero_shot_share", max_zero_shot_share)):
+        if not 0.0 <= value <= 1.0:
+            raise ValueError(f"{name} must be within [0, 1], got {value}")
+
+    total = len(cluster_ids)
+    if total == 0:
+        return []
+    sizes: Counter[str] = Counter(cluster_ids)
+    cap = max_zero_shot_share * total
+
+    cluster_split: dict[str, str] = {}
+    for cluster_id in sizes:
+        if sizes[cluster_id] > cap:
+            cluster_split[cluster_id] = "train"       # 巨大クラスタはtrainへ固定
+            continue
+        value = _bucket(seed, cluster_id)
+        if value < zero_shot_fraction / 2:
+            cluster_split[cluster_id] = "test-zero-shot"
+        elif value < zero_shot_fraction:
+            cluster_split[cluster_id] = "dev-zero-shot"
+        else:
+            cluster_split[cluster_id] = "train"
+
+    position: Counter[str] = Counter()
+    splits: list[str] = []
+    for cluster_id in cluster_ids:
+        assigned = cluster_split[cluster_id]
+        if assigned != "train":
+            splits.append(assigned)
+            continue
+        index = position[cluster_id]
+        position[cluster_id] += 1
+        inner = _bucket(seed, f"{cluster_id}#{index}")
+        if inner < seen_fraction / 2:
+            splits.append("test-seen")
+        elif inner < seen_fraction:
+            splits.append("dev-seen")
+        else:
+            splits.append("train")
+    return splits
+
+
+def split_leakage(cluster_ids: Sequence[str], splits: Sequence[str]) -> dict[str, list[str]]:
+    """zero-shot と他splitをまたぐクラスタを列挙する。空なら漏れ無し。"""
+    if len(cluster_ids) != len(splits):
+        raise ValueError("cluster_ids と splits の長さが一致しない")
+    seen: dict[str, set[str]] = defaultdict(set)
+    for cluster_id, split in zip(cluster_ids, splits):
+        seen[cluster_id].add(split)
+    zero = {"dev-zero-shot", "test-zero-shot"}
+    return {cluster_id: sorted(values) for cluster_id, values in seen.items()
+            if (values & zero) and (values - zero)}

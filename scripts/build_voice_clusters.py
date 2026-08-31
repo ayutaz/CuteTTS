@@ -28,6 +28,7 @@ frozen の公式 Speaker Encoder が作った 256 次元 embedding をクラス�
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import sys
 from collections import Counter
 from pathlib import Path
@@ -36,11 +37,16 @@ from cutetts.training import artifacts, text_rules
 from cutetts.training.manifest import load_manifest, manifest_checksum, summarize, write_manifest
 from cutetts.training.speaker_cache import SpeakerEmbeddingCacheReader
 from cutetts.training.voice_clusters import (
+    DEFAULT_MAX_ZERO_SHOT_SHARE,
+    DEFAULT_SEEN_FRACTION,
+    DEFAULT_ZERO_SHOT_FRACTION,
     assign_clusters,
+    assign_splits_by_cluster,
     build_profiles,
     cluster_members,
     cluster_speakers,
     cluster_summary,
+    split_leakage,
     suspicious_speakers,
 )
 
@@ -50,6 +56,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--manifest", default="data/manifests/all.jsonl")
     parser.add_argument("--speaker-cache", default="data/cache/speaker")
     parser.add_argument("--out", default="data/manifests/all_clustered.jsonl")
+    parser.add_argument("--zero-shot-fraction", type=float, default=DEFAULT_ZERO_SHOT_FRACTION,
+                        help="zero-shotへ回すクラスタの割合（dev/testで折半）")
+    parser.add_argument("--seen-fraction", type=float, default=DEFAULT_SEEN_FRACTION,
+                        help="trainクラスタ内でseen評価へ回す発話の割合")
+    parser.add_argument("--max-zero-shot-share", type=float, default=DEFAULT_MAX_ZERO_SHOT_SHARE,
+                        help="1クラスタがzero-shotへ持ち込める発話数の上限（全体比）")
     parser.add_argument("--threshold", type=float, default=0.70)
     parser.add_argument("--dispersion-threshold", type=float, default=0.35)
     parser.add_argument("--max-samples-per-speaker", type=int, default=32)
@@ -79,6 +91,30 @@ def main() -> None:
         suspicious = suspicious_speakers(profiles, dispersion_threshold=args.dispersion_threshold)
 
         clustered = list(assign_clusters(records, mapping))
+
+        # split を **クラスタ単位で切り直す**（D-015）。
+        # manifest 段階の split は speaker_id 単位の暫定値で、
+        # 「別IDの同じ声」が train と zero-shot へ分かれて漏れる。
+        cluster_ids = [r.voice_cluster_id for r in clustered]
+        new_splits = assign_splits_by_cluster(
+            cluster_ids, seed=args.seed,
+            zero_shot_fraction=args.zero_shot_fraction,
+            seen_fraction=args.seen_fraction,
+            max_zero_shot_share=args.max_zero_shot_share)
+        before = Counter(r.split for r in clustered)
+        clustered = [dataclasses.replace(r, split=s)
+                     for r, s in zip(clustered, new_splits)]
+        after = Counter(r.split for r in clustered)
+
+        leaked = split_leakage(cluster_ids, new_splits)
+        if leaked:
+            raise SystemExit(
+                f"クラスタ単位のsplitに漏れがある: {len(leaked)} 件 "
+                f"（例 {list(leaked.items())[:3]}）")
+        print("split を voice cluster 単位へ切り直した（漏れ 0 件）")
+        for name in sorted(set(before) | set(after)):
+            print(f"  {name:16s} {before.get(name, 0):8,} -> {after.get(name, 0):8,}")
+
         written = write_manifest(args.out, clustered)
 
     # 総称ラベル（既知）と dispersion 検出の突き合わせ
