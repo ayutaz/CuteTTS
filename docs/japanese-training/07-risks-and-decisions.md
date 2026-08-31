@@ -321,9 +321,24 @@ CLAUDE.md の D-023 と記憶（`confirm-before-local-gpu`）に置く**こと�
 2. script 名は `python` 起動の直後にある場合のみ対象（単なる言及は無視）
 3. `--device cuda|auto`、`cutetts` CLI、`pytest -m gpu` も対象に追加
 
-なお `.claude/settings.json` は権限ホック本体のため、
-**auto mode ではアシスタントから書き換えられない**（分類器がブロックする）。
-変更はユーザーが適用する必要がある。
+`.claude/settings.json` は権限ホック本体のため、auto mode では既定で
+アシスタントの書き込みが分類器にブロックされる。**ユーザーの明示的な許可**を
+得たうえで適用した（2026-08-31）。
+
+適用後、10ケースで判定を検証した:
+
+| コマンド | 期待 | 結果 |
+|---|---|---|
+| commit message に script 名 | 素通り | ○ |
+| heredoc 内に script 名 | 素通り | ○ |
+| `grep -n "train_continual"` | 素通り | ○ |
+| `pytest tests/training -q` | 素通り | ○ |
+| ssh 経由のリモート実行 | 素通り | ○ |
+| `python scripts/train_continual.py --device cuda` | ask | ○ |
+| `python scripts/evaluate_japanese_cer.py` | ask | ○ |
+| `cutetts --model-dir ...` | ask | ○ |
+| `pytest -m gpu` | ask | ○ |
+| `--device auto` | ask | ○ |
 
 ## 3. 未解決事項
 
