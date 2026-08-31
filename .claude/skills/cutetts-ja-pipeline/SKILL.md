@@ -1,11 +1,11 @@
 ---
 name: cutetts-ja-pipeline
-description: Use when running, resuming, or debugging any CuteTTS Japanese continual-training phase (P0 baseline, P1b tokenizer, P1c VAE, P1d manifest, P1e latent cache) in this repository — covers setup, the venv, GPU rules, exact commands with their inputs and outputs, and the environment traps that make these scripts fail.
+description: Use when running, resuming, or debugging any CuteTTS Japanese continual-training phase (P0 baseline, P1b tokenizer, P1c VAE, P1d manifest, P1e latent cache, S0 training and CER evaluation) in this repository — covers setup, the venv, GPU rules, running jobs on vast.ai, exact commands with their inputs and outputs, and the traps that make these scripts silently produce wrong results.
 ---
 
 # CuteTTS 日本語学習パイプラインの実行
 
-P0/P1 スクリプトを実際に完走させるためのリファレンス。
+P0/P1/S0 スクリプトを実際に完走させるためのリファレンス。
 実測値は [`docs/japanese-training/RESULTS.md`](../../../docs/japanese-training/RESULTS.md)、
 フェーズ定義は `docs/japanese-training/08-execution-plan.md`。
 
@@ -13,9 +13,13 @@ P0/P1 スクリプトを実際に完走させるためのリファレンス。
 
 1. **Python は必ず `.venv/Scripts/python.exe`。** リポジトリルートから実行する。
    システム既定は3.14で torch 2.5.1 が動かない（対応は3.9〜3.12）。
-2. **GPUを使う処理は実行前にユーザーへ確認する。** バックグラウンドでも同じ。
+2. **ローカルGPUを使う処理は実行前にユーザーへ確認する。** バックグラウンドでも同じ。
    並列起動しない（1本ずつ直列）。所要時間とVRAMの見積もりを伝える。
-   `.claude/settings.json` の PreToolUse フックが検出して確認を促す。
+   `.claude/settings.json` の PreToolUse フックが検出して確認を促す
+   （`python <script>.py`、`--device cuda|auto`、`cutetts` CLI、`pytest -m gpu` が対象。
+   ssh/scp/rsync/vastai の遠隔実行と git commit のメッセージ本文は除外）。
+3. **重いGPU処理は vast.ai へ回す。** 起動前に費用見積もりを提示する。
+   終わったらインスタンスを破棄する。**自分が作っていないインスタンスには触らない。**
 
 コマンド例はbash記法。PowerShellで実行するなら行継続 `\` は使えない（1行にする）。
 
@@ -65,9 +69,17 @@ data/raw/moe/info.csv         # 同上の話者一覧
 | p1d | `prepare_japanese_manifest.py` | 不要 | gol metadata + tars, moe zips | `data/manifests/{gol,moe,all}.jsonl`, `artifacts/p1d/<ts>/` |
 | p1e | `cache_audio_latents.py` | **要** | `data/manifests/all.jsonl` + `model/CuteTTS`（VAE と Speaker Encoder） | `data/cache/{latents,speaker}/`, `artifacts/p1e/<ts>/` |
 | p1d | `build_voice_clusters.py` | 不要 | `data/cache/speaker/`, manifest | `data/manifests/all_clustered.jsonl`, `artifacts/p1d-clusters/<ts>/` |
+| s0 | `build_eval_set.py` | 不要 | manifest | `data/eval/s0_eval_set.json` |
+| s0 | `evaluate_japanese_cer.py` | **要** | eval set, model dir | `artifacts/s0-cer/<ts>/`（音声つき） |
+| s0 | `train_continual.py` | **要** | `all_clustered.jsonl`, 両cache, `model/CuteTTS` | `checkpoints/s0/`, `artifacts/s0-train/<ts>/` |
+| s0 | `diagnose_flow_loss.py` | **要** | 同上 + 比較したいcheckpoint | `artifacts/s0-diagnose/<ts>/` |
+| s0 | `check_reference_following.py` | **要** | latent cache, checkpoint | `artifacts/s0-refcheck/<ts>/`（音声つき） |
+| — | `benchmark_training_memory.py` | **要** | `model/CuteTTS` | VRAM/throughput の実測 |
 
-**依存順序**: `prepare_japanese_manifest` → `cache_audio_latents` → `build_voice_clusters`。
+**依存順序**: `prepare_japanese_manifest` → `cache_audio_latents` → `build_voice_clusters`
+→ `train_continual` → `diagnose_flow_loss` / `evaluate_japanese_cer` / `check_reference_following`。
 P0/P1b/P1c は互いに独立（P1cは音声zipだけあればよい）。
+`build_eval_set` は manifest だけで動く（学習前に基準線を測るため先に作る）。
 
 `--config` を取るのは **`analyze_japanese_tokenizer.py` だけ**。他はすべて個別フラグ。
 
@@ -95,7 +107,26 @@ jq '.summary' artifacts/p0/*/metrics.json   # gate_passed は true/false。error
 
 # voiceクラスタ（CPU）。既定0.70ではなく 0.92
 .venv/Scripts/python.exe scripts/build_voice_clusters.py --threshold 0.92
+
+# --- S0 ---
+# 評価set（CPU）。学習前に作り、基準線を測ってからゲート値を固定する
+.venv/Scripts/python.exe scripts/build_eval_set.py
+
+# 基準線CER（GPU）。学習前に必ず測る
+python scripts/evaluate_japanese_cer.py --label baseline --device cuda
+
+# 学習（GPU）。S0の通過実績がある設定
+python scripts/train_continual.py --steps 3000 --batch-size 4 --lr 2e-5   --warmup 100 --save-every 1000 --group-key voice_cluster_id   --condition-dropout 0.1 --out checkpoints/s0 --device cuda
+
+# 学習後（GPU）。この3本を必ず回す。1本ずつ直列
+python scripts/diagnose_flow_loss.py --model-dir checkpoints/s0/inference --device cuda
+python scripts/diagnose_flow_loss.py --model-dir model/CuteTTS --label base --device cuda
+python scripts/evaluate_japanese_cer.py --model-dir checkpoints/s0/inference   --label trained --device cuda
+python scripts/check_reference_following.py --model-dir checkpoints/s0/inference   --split dev-seen --references 4 --device cuda
 ```
+
+**学習後の判定は `diagnose_flow_loss` を base と学習後の両方で回して比較する。**
+学習ループが出す損失だけでは成否が判定できない（下の「静かに壊れる罠」を読むこと）。
 
 `--sampler-compile-mode` の有効値: `auto`（triton有無で判定）/ `eager` / `euler-only` / `full-sampler`。
 tritonを入れられないなら `eager` で回避できる（RTFは悪化する）。
@@ -113,6 +144,48 @@ gol全体（10,654時間）をP1eに通すと **約239 GPU時間 / latent cache 
 
 パイロットと本実行は同じcacheへ書く。**衝突ではなく再開**として扱われる（既存IDはスキップ）。
 
+## vast.ai で回す
+
+```bash
+# bootstrap（リポジトリ取得 + 依存 + checkpoint + テスト）
+ssh -p <port> root@<host> 'bash -s' < scripts/vastai_bootstrap.sh
+
+# データ転送（55 MB。scp よりtar over sshが速い）
+tar czf - data/cache/latents data/cache/speaker data/manifests/all_clustered.jsonl   | ssh -p <port> root@<host> 'cd /workspace/CuteTTS && tar xzf -'
+
+# 実行は setsid + nohup で切り離し、ログファイルへ落とす
+ssh -p <port> root@<host> "cd /workspace/CuteTTS && printf '%s
+'   'export PYTHONIOENCODING=utf-8'   'python -u scripts/train_continual.py ... --device cuda' > job.sh   && setsid nohup bash job.sh > job.log 2>&1 < /dev/null & echo launched"
+
+# 進捗は remote の tail -f を監視する
+ssh -p <port> root@<host> 'tail -f -n +1 /workspace/CuteTTS/job.log'
+
+# 終わったら artifact を回収（音声も含めるなら --exclude を外す）
+ssh -p <port> root@<host> 'cd /workspace/CuteTTS && tar czf - artifacts/s0-*' | tar xzf -
+
+# 破棄（確認プロンプトが出るので yes を渡す）
+yes | vastai destroy instance <id>
+```
+
+**リモート実行で必ず守ること**
+
+- `python -u` を使い、**リモート側で `| tail` や `| grep` に通さない**。
+  パイプがバッファするため、プロセスが終わるまで出力が1行も来ない。
+- `pkill -f <pattern>` を使わない。ssh のコマンド全文や親の `bash -c` に
+  同じ文字列が含まれ、**自分自身を殺す**。実際に2回踏んだ。
+- 転送速度は安定しない。570 MB が39 KB/s まで落ちた実績がある。
+  **大きいcheckpointの回収を当てにしない。** 必要なら早めに落とす。
+
+## 静かに壊れる罠（結果が出るのに間違っている）
+
+| 症状 | 原因と対処 |
+|---|---|
+| **flow loss が 0.01 を下回る** | ほぼ確実に異常。flow matching は velocity を完全には当てられない。「常に0を出す予測器」の loss が約2.0なので、0.003 は決定係数0.998に相当し原理的に到達できない。`diagnose_flow_loss.py` で train / dev / 未学習base を同じ経路で測る |
+| 学習は進むのにモデルが悪化する | `PairSampler.sample()` を step ごとに呼んでいる。**呼ぶたびにRNGを作り直す仕様**なので毎回同じペアが返る。`iter_pairs()` の stream を1本持って `islice` で引く。`tests/training/test_pair_stream.py` が検知する |
+| stop loss が 0.0000 になる | 上と同じ原因の可能性が高い。少数sampleの丸暗記 |
+| 評価CERが特定subsetだけ84%前後に張り付く | 評価文に語彙的内容が無い（`ふあぁぁぁ…` のような感情表現）。`build_eval_set.py` の `has_lexical_content()` が除外する。**CERを見て文を選び直さないこと** |
+| `ms/step` が異常な値 | 表示のみのバグ。save のたびに `state.step` が進むため分母が壊れる（修正済み） |
+
 ## 環境の罠
 
 | 症状 | 原因と対処 |
@@ -124,6 +197,8 @@ gol全体（10,654時間）をP1eに通すと **約239 GPU時間 / latent cache 
 | manifestの件数が倍 | moe zipの `.bak.json` を除外していない（本体と同数ある） |
 | クラスタが1つに潰れる | 閾値0.70はこの埋め込み空間で破綻する。0.92を使う |
 | 途中で落ちた | `artifacts/<phase>/<ts>/` に metrics.json が無ければ未完。消してよい。cacheは再開されるので消さない |
+| `AttributeError: 'GenerationResult' object has no attribute ...` | `tts.generate()` は tensor ではなく `GenerationResult` を返す。`.waveform` と `.sample_rate` を取る |
+| CUDA generator エラー | CPU generator を CUDA device で使った。`objectives._randn` が吸収するが、新しい乱数経路を足すときは同じ扱いにする |
 
 ## データの前提（推測で埋めない）
 
@@ -149,3 +224,6 @@ artifacts/<phase>/<timestamp>/
 （MoeSpeech LICENSE: 音声ファイルを1つでも公開すれば再配布とみなす）。
 provenance を問わず全音声に適用する — P0のサンプルも例外にしない。
 ユーザーへローカルで見せるのは可。数値は `metrics.json` と `RESULTS.md` に残す。
+
+S0で生成した音声は `artifacts/s0-cer/*/samples/` と `artifacts/s0-refcheck/*/audio/` にある
+（学習データそのものではなく生成物だが、同じ扱いにする）。

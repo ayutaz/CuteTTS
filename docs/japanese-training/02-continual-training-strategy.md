@@ -1,6 +1,6 @@
 # 日本語継続学習の方針
 
-最終更新: 2026-08-30
+最終更新: 2026-08-31
 
 ## 1. 採用する起点
 
@@ -20,36 +20,46 @@ CuteTTS-JA-distill
 
 ## 2. 初期freeze方針
 
-初期PoCの推奨構成:
+**S0（2026-08-31）で案Aをそのまま実施し、通過しました。**
 
-| Component | 方針 | 理由 |
+| Component | 方針 | 状態 |
 |---|---|---|
-| Audio VAE | freeze | 日本語再構成で問題がない限り、最も重い再学習を避ける |
-| Speaker Encoder | freeze | まず公開256-dim speaker表現の言語横断性を測る |
-| Text embedding | train | 日本語tokenへの適応が必要 |
-| Patch Encoder | train | 日本語音響patchへの適応を許す |
-| Causal LM backbone | train | textからpatch系列への言語依存対応を学ぶ |
-| Diffusion Head | train | 日本語の局所音響分布へ適応する |
-| Stop Predictor | train | 日本語文長・句読点・終端へ適応する |
+| Audio VAE | freeze | **確定**（P1c: CER差 +0.58pt。D-003） |
+| Speaker Encoder | freeze | 提案（zero-shot SIMで再判定。D-004） |
+| Text embedding | train | S0で実施 |
+| Patch Encoder | train | S0で実施（`locenc`。D-005の比較はS1） |
+| Causal LM backbone | train | S0で実施 |
+| Diffusion Head | train | S0で実施 |
+| Stop Predictor | train | S0で実施（loss 全splitで -72〜80%） |
 
-これは提案であり、実験で比較します。特にPatch Encoderについては次を残します。
+Patch Encoderについて残る選択肢:
 
-- A: Patch Encoderを含むTTS本体をfull fine-tune
+- **A: Patch Encoderを含むTTS本体をfull fine-tune** ← S0で実施、通過
 - B: Patch Encoderをfreezeし、LM + Diffusion Head + Stop Predictorをtrain
 - C: LM中心の最小更新
 
-主案はAです。B/Cは、VRAM、初期不安定性、catastrophic forgettingを調べるablationです。
+**主案はAで確定に近い。** S0では peak VRAM 4.15 GB（microbatch 1）で
+16 GBに余裕をもって収まり、B/Cを選ぶメモリ上の動機は消えました（D-006確定）。
+B/CはS1でcatastrophic forgettingを見るablationとして残します（D-005）。
 
 ## 3. Full fine-tuningとLoRA
 
 約230MのTTS本体であるため、最初はfull fine-tuningを主案とします。音響分布への適応では、LMだけへLoRAを入れるとPatch EncoderやDiffusion Headの適応を制限する可能性があります。
 
-ただし、これは未検証の設計判断です。次の場合はLoRAまたは部分freezeを再検討します。
+**S0でfull fine-tuningの実行可能性を確認しました**（peak VRAM 4.15 GB、3000stepで発散なし）。
+次の場合はLoRAまたは部分freezeを再検討します。
 
-- 1 GPUのメモリへ収まらない
-- full fine-tuningで既存言語やspeaker identityが急激に崩れる
-- 小規模PoCで更新対象を絞った方が明確に安定する
-- 複数日本語variantを低コストに管理する必要が生じる
+| 条件 | S0時点 |
+|---|---|
+| 1 GPUのメモリへ収まらない | **該当せず**（4.15 GB / 16 GB） |
+| full fine-tuningで既存言語やspeaker identityが急激に崩れる | **未測定**。英語・中国語のforgettingはS1で測る |
+| 小規模PoCで更新対象を絞った方が明確に安定する | 該当せず |
+| 複数日本語variantを低コストに管理する必要が生じる | 該当せず |
+
+**bf16単独学習の注意:** 値が1.0付近のパラメータ（LayerNorm weight）は
+更新がbf16の分解能に埋もれて消える。S0では locenc のLayerNorm が
+3000step後も無変化だった。S1で停滞するならfp32 master weightを検討する
+（[04章 §4](04-training-implementation.md)）。
 
 ## 4. 日本語Tokenizerのdecision gate
 
@@ -238,7 +248,7 @@ Stage 4（Japanese VAE）は当面着手しない。
 2. 日本語VAE reconstruction reportと音声sample
 3. metadata validatorと固定evaluation set
 4. training forward/lossの最小実装
-5. 10〜30時間overfit checkpoint
+5. 10〜30時間overfit checkpoint ← **S0で達成（7.15時間で通過）**
 6. 100〜500時間PoC checkpoint
 7. 1,000時間checkpoint (`CuteTTS-JA v0.1`候補)
 8. 3,000〜10,000時間full checkpoint
@@ -246,3 +256,10 @@ Stage 4（Japanese VAE）は当面着手しない。
 10. 最後にCuteTTS-JA-distill
 
 各段階は、コードがあるだけで完了とはしません。checkpoint、設定、seed、入力manifest、評価結果、音声sampleが揃った状態を完了条件とします。
+
+**S0では checkpoint を残していません**（vast.aiインスタンス破棄時に消失。
+転送が約39 KB/s まで落ち、571 MB に4時間かかる見積もりだったため中止）。
+設定・seed・manifest・評価結果・音声sampleは揃っており、
+`scripts/train_continual.py` を同じ引数で回せば再現できます
+（[S0-GATE.md](S0-GATE.md) にコマンドを記載）。
+**S1以降は checkpoint を必ず残すこと。**

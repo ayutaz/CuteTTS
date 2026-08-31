@@ -1,6 +1,6 @@
 # 確認済みベースラインとアーキテクチャ
 
-最終更新: 2026-08-30
+最終更新: 2026-08-31
 
 ## 1. CuteTTSの位置づけ
 
@@ -147,6 +147,12 @@ VAEの公開weightはTTS本体とは別componentです。ローカル実装の `
 - 日本語評価pipeline
 
 `src/cutetts/modeling/model.py` と `src/cutetts/modeling/processor.py` は明示的にinference-onlyと記述されています。公開moduleは学習再現の基礎になりますが、そのまま `train.py` を実行できる状態ではありません。
+
+**2026-08-31追記:** 学習pathは `src/cutetts/training/` として**新規に追加**され、
+S0（7.15時間の日本語継続学習）を通過しました。既存の推論pathには手を入れていません。
+`training_forward` は公開moduleの `prepare_input_embeds` / `forward_lm` / `head._predict` を
+そのまま呼び、学習時だけ `config.scale_acoustic_latent` を一時的に無効化します
+（正規化はdataset側で済ませるため）。詳細は [04章](04-training-implementation.md)。
 
 ## 8. ライセンス
 

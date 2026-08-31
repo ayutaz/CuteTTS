@@ -1,6 +1,6 @@
 # CuteTTS 日本語継続学習
 
-最終更新: 2026-08-30
+最終更新: 2026-08-31
 
 ## 目的
 
@@ -27,18 +27,28 @@
 - **P1c: Audio VAE 日本語再構成**（CER差 +0.58pt → **freeze確定**、Stage 4見送り）
 - **P1d: manifest / split / voiceクラスタ**（t=0.92 較正、leakage 0件）
 - **P1e: 前処理パス Pass A**（6,112発話、外挿 65.3 GB / 239 GPU時間）
-- 実装: `src/cutetts/training/` 7モジュール + `scripts/` 5本、**テスト354件PASS**
+- **P2: 学習forward復元**（flow-matching loss、stop target、packing、trainer。変異テスト9/9検出）
+- **S0: 10〜30時間 overfit** → **主ゲート通過**。in_domain CER **35.8% → 28.4%**
+- 実装: `src/cutetts/training/` 7モジュール + `scripts/` 10本、**テスト全件PASS**
 
-数値の一覧は [P0/P1 実測結果まとめ](RESULTS.md) を参照。
+数値の一覧は [実測結果まとめ](RESULTS.md)、S0のゲートと結果は [S0-GATE.md](S0-GATE.md) を参照。
 
 ### 未実施
 
-- **P2: 学習forward復元**（flow-matching loss、stop target、packing、trainer）← 次はここ
+- **S1: 100〜500時間 PoC** ← 次はここ。**データ拡充が前提**（現在7.15時間）
 - P1e Pass B（gol全体7 TB。S2直前まで実施しない）
-- Stage 0以降の日本語学習と評価
-- 固定評価set（text-challenge、英語・中国語のforgetting用）
-- 日本語母語話者による主観評価
+- zero-shot split の話者数確保（現在3人。[R-013](07-risks-and-decisions.md)）
+- 英語・中国語のforgetting用の固定評価set
+- 日本語母語話者による主観評価（S0の生成音声は `artifacts/` にある）
 - モデル公開範囲の決定（R-009の残件）
+
+### S0で分かったこと
+
+- **日本語継続学習は成立する。** 7.15時間・3000step・9分でCERが7.4pt改善した。
+- **未学習baseが既に部分的な日本語を出す。** 「音声が出る」はゲートにならない。
+- **out-of-domain（数字・固有名詞）は改善しない。** 74.7% → 76.4%（[R-010](07-risks-and-decisions.md)）。
+- **学習ループの損失だけでは成否を判断できない。** 1回目の学習は同じ4発話を
+  3000step繰り返しており、loss 0.003 は丸暗記だった（[R-012](07-risks-and-decisions.md)）。
 
 ## 読み方
 
@@ -79,19 +89,24 @@
 3. 公開推論実装からtraining forward、flow-matching loss、stop loss、packingを再現できるか。
 4. 10〜30時間規模で日本語へのoverfitが成立するか。
 
+1〜4はすべて検証済み（4は7.15時間で成立）。次の問いは
+**100〜500時間で品質とzero-shot voice cloningが実用水準に達するか**。
+
 ### 初期の推奨構成
 
-| Component | 初期方針 | 状態 |
+| Component | 方針 | 状態 |
 |---|---|---|
-| Audio VAE | freeze | 提案 |
-| Speaker Encoder | freeze | 提案 |
-| Text embedding | train | 提案 |
-| Patch Encoder | trainを既定とする | 提案 |
-| Causal LM backbone | train | 提案 |
-| Flow/Diffusion Head | train | 提案 |
-| Stop Predictor | train | 提案 |
+| Audio VAE | freeze | **確定**（P1c: CER差 +0.58pt。D-003） |
+| Speaker Encoder | freeze | 提案（zero-shot SIMで再判定。D-004） |
+| Text embedding | train | S0で実施 |
+| Patch Encoder | train | S0で実施（freeze版との比較はD-005として残る） |
+| Causal LM backbone | train | S0で実施 |
+| Flow/Diffusion Head | train | S0で実施 |
+| Stop Predictor | train | S0で実施（loss -72〜80%） |
 
-先行会話の途中には「最初だけPatch Encoderもfreezeする」案もありました。最新の整理ではPatch Encoderをtrainする案を主案とし、freeze案は比較実験またはメモリ不足時の代替案として残します。
+S0では上記すべてを同時にtrainするfull fine-tuningで通過しました。
+VRAMは4.15 GB（microbatch 1）で、16 GBに収まることを確認済み（D-006確定）。
+Patch Encoderのfreeze版との比較（D-005）はS1で行います。
 
 ## 重要な境界
 

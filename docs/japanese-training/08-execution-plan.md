@@ -1,6 +1,6 @@
 # 対応計画（実行フェーズ定義）
 
-最終更新: 2026-08-30
+最終更新: 2026-08-31
 
 ## この文書の位置づけ
 
@@ -26,18 +26,29 @@
 | P1d | Manifest / split / pairing | 再現可能なデータ入口があるか | **完了**（voiceクラスタ t=0.92、leakage 0） |
 | P1e | 前処理パス | 全音声1パスでlatentとspeaker embeddingを作れるか | **Pass A完了**（Pass BはS2直前） |
 | P2 | 学習forward復元 | 公開moduleから正しい学習stepを構成できるか | **完了**（ゴール7件すべて達成） |
-| S0 | 10〜30h overfit | 日本語がそもそも学習できるか | **次はここ**（GPU必要） |
-| S1 | 100〜500h PoC | 日本語品質とzero-shot cloningが成立するか | 未着手 |
+| S0 | 10〜30h overfit | 日本語がそもそも学習できるか | **完了**（CER 35.8% → 28.4%。7.15hで通過） |
+| S1 | 100〜500h PoC | 日本語品質とzero-shot cloningが成立するか | **次はここ**（データ拡充が前提） |
 | S2 | 1,000h | 分布を広げても安定するか（v0.1候補） | 未着手 |
 | S3 | 3,000〜10,000h | 最終baseモデルを作れるか | 未着手 |
 | S4 | Japanese Audio VAE | VAEがボトルネックの場合のみ実施 | **見送り**（P1cで根拠なし・D-010） |
 | S5 | Guidance-step distillation | 日本語baseを高速化できるか | 未着手 |
 
-**2026-08-30時点で P0 / P1 / P2 は完了。次に着手すべきは S0（10〜30時間 overfit）です。**
-P2はすべてCPUで検証した（縮小した実CuteTTSModelを使用）。
-**S0からはGPUが必要**で、ローカルGPUは使わず vast.ai を使う（D-023 / D-024）。
+**2026-08-31時点で P0 / P1 / P2 / S0 は完了。次に着手すべきは S1（100〜500時間 PoC）です。**
 
-実行に使うコマンドは `docs/japanese-training/RESULTS.md` と
+S0は **7.15時間**（S0想定の10〜30hに未達）で主ゲートを通過した。
+in_domain CER 35.8% → 28.4%、reference追随 12/12、所要9分（vast.ai RTX 3090）。
+結果の全文は [S0-GATE.md](S0-GATE.md)。
+
+**S1に進む前に必要な準備:**
+
+| 項目 | 現状 | 必要 |
+|---|---|---|
+| 学習データ | 7.15時間 / 63 voice cluster | 100〜500時間 |
+| zero-shot split の話者 | **3人**（[R-013](07-risks-and-decisions.md)） | 20人以上 |
+| out-of-domain 対策 | 74.7% → 76.4% で改善せず | 数字・固有名詞を含む学習文の確保 |
+
+GPUはローカルを使わず vast.ai を使う（D-023 / D-024）。
+実行コマンドは [RESULTS.md](RESULTS.md) と
 `.claude/skills/cutetts-ja-pipeline/SKILL.md` にまとまっています。
 
 ## 共通ルール（提案）

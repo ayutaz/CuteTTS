@@ -1,6 +1,6 @@
 # 段階的な実験ロードマップ
 
-最終更新: 2026-08-30
+最終更新: 2026-08-31
 
 ## 原則
 
@@ -87,9 +87,19 @@ training codeがなくても確認できる最大リスクを先に潰します�
 - save/resume後の次stepが一致する
 - packingがunpackedの結果を変えない
 
-## Stage 0: 10〜30時間 overfit
+## Stage 0: 10〜30時間 overfit — **完了（2026-08-31）**
 
-先行案の10〜50時間を、最初の既定範囲10〜30時間に絞ります。30時間で判断できない場合のみ50時間へ拡大します。
+先行案の10〜50時間を、最初の既定範囲10〜30時間に絞りました。
+**実際には 7.15時間で主ゲートを通過**したため、拡大は不要でした。
+結果の全文は [S0-GATE.md](S0-GATE.md)。
+
+| 項目 | 実績 |
+|---|---|
+| データ | 5,431発話 / 7.15時間 / 63 voice cluster |
+| 設定 | 3000 step、lr 2e-5、batch 4、warmup 100、condition dropout 0.1 |
+| 所要 | 9分（vast.ai RTX 3090）、peak VRAM 4.15 GB |
+| in_domain CER | 35.8% → **28.4%** |
+| reference追随 | 4話者4択で 12/12 |
 
 ### 目的
 
@@ -104,25 +114,46 @@ training codeがなくても確認できる最大リスクを先に潰します�
 - train/dev sampleを短い間隔で生成
 - learning rateとfreeze variantを小規模比較
 
-### Success evidence
+### Success evidence（実績）
 
-- target textに対応した日本語音声が出る
-- loss低下だけでなく、聞き取れる発音改善がある
-- textを入れ替えると出力内容も追随する
-- reference speakerを入れ替えるとspeaker identityが追随する
-- 未学習文でも完全なmemorization以上の挙動が見える
+| 項目 | 結果 |
+|---|---|
+| target textに対応した日本語音声が出る | **ゲートにならなかった**。未学習baseで既に成立していたため、CERの改善幅に置き換えた |
+| loss低下だけでなく発音改善がある | CER -7.4pt。実聴取は未実施 |
+| textを入れ替えると出力内容も追随する | 達成（未学習52文でCER 28.4%。追随しなければ約100%） |
+| reference speakerを入れ替えるとspeaker identityが追随する | 達成（12/12、自己0.833 vs 他者0.600） |
+| 未学習文でも完全なmemorization以上の挙動が見える | 達成（評価文は学習manifest外、dev-zero-shotも悪化せず） |
 
-### Stop/rollback条件
+### Stop/rollback条件（確認結果）
 
-- VAE reconstruction自体に重大な欠陥が見つかる
-- Tokenizerが情報を失っている
-- target/reference leakageで見かけ上成功している
-- stop headが学習できず無限生成または早期停止する
-- NaN/overflowが再現する
+| 条件 | 該当 |
+|---|---|
+| VAE reconstruction自体に重大な欠陥 | なし（P1c: CER差 +0.58pt） |
+| Tokenizerが情報を失っている | なし（P1b: `<unk>` 0%） |
+| target/reference leakageで見かけ上成功 | なし（`tests/training/test_leakage.py` で因果性を確認） |
+| stop headが学習できず無限生成または早期停止 | なし（stop loss 全splitで -72〜80%） |
+| NaN/overflowが再現 | なし |
 
-## Stage 1: 100〜500時間 PoC
+**ただし1回目の学習は別の理由で無効だった。** `PairSampler.sample()` の誤用で
+3000step全部が同じ4発話になり、loss 0.003 は丸暗記だった（[R-012](07-risks-and-decisions.md)）。
+上のどの停止条件にも該当せず、損失曲線だけ見れば成功に見えた。
+**Stage 1以降も、学習ループの損失だけで判断しない（D-025）。**
+
+## Stage 1: 100〜500時間 PoC — **次はここ**
 
 100〜300時間で最初の判断を行い、結果が良い場合に500時間まで拡大します。
+
+### 着手前に必要な準備（S0の実績から）
+
+| 項目 | 現状 | 必要 |
+|---|---|---|
+| 学習データ | 7.15時間 / 63 voice cluster | 100〜500時間 |
+| zero-shot split の話者 | **3人**（[R-013](07-risks-and-decisions.md)） | 20 voice cluster以上 |
+| out-of-domain のtext | 会話文に偏る | 数字・固有名詞を含む学習文 |
+
+S0では out_of_domain CER が 74.7% → 76.4% と改善しなかった。
+これは [R-010](07-risks-and-decisions.md)（domain偏り）の裏づけであり、
+**データ量を増やすだけでは解消しない**可能性が高い。
 
 ### 目的
 
@@ -141,11 +172,11 @@ training codeがなくても確認できる最大リスクを先に潰します�
 
 ### 比較実験
 
-- Patch Encoder train vs freeze
-- 100%日本語 vs replay混合
+- Patch Encoder train vs freeze（[D-005](07-risks-and-decisions.md)。S0はtrainのみ実施）
+- 100%日本語 vs replay混合（D-009）
 - raw/normalized text
 - 必要ならtext + reading
-- full fine-tuning vs部分freeze
+- full fine-tuning vs部分freeze（S0はfull。16 GBに収まることを確認済み・D-006確定）
 
 ### Exit gate
 
@@ -235,14 +266,23 @@ P1およびStage 1〜3の失敗分析でVAEがボトルネックと示された�
 - 開発PoC: RTX 4090 24 GB ×1でも可能性あり
 - 大規模run: H100 80 GB ×8を初期容量計画の候補
 
-これは実測結果ではありません。GPU契約前に次を測ります。
+### 実測値（S0前段・S0、vast.ai RTX 3090）
 
-- parameter/optimizer/gradient memory
-- sequence length別activation memory
-- microbatch 1のpeak VRAM
+| 項目 | 実測 |
+|---|---|
+| microbatch 1 の peak VRAM（full fine-tuning、bf16） | **4.15 GB** |
+| throughput | **150〜177 ms/step**（batch 4、target 188 patch上限） |
+| 16 GBでfull fine-tuningが載るか | **載る**（D-006確定） |
+| S0（7.15時間・3000step）の実所要 | **9分** |
+
+**開発PoCにH100は不要。** 24 GB級どころか16 GBで足りる。
+S1の規模（100〜500時間）でも、同じmicrobatchなら1 GPUで回せる見込み。
+
+まだ測っていないもの:
+
 - gradient accumulation時のthroughput
 - activation checkpointingの効果
-- latent cache I/O
+- latent cache I/O（S1のデータ量で律速するか）
 - single GPUとdistributedのscaling
 
 最終GPU数は、目標終了時間、利用可能budget、failure recovery、checkpoint I/Oを含めて決定します。
