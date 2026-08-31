@@ -271,6 +271,32 @@ noise が N(0,1) なので二乗平均は約2.0。0.003 は決定係数 0.998 �
 
 D-025 として「S0以降、学習ループの損失だけで成否を判断しない」を追加。
 
+### R-013: zero-shot split の話者数が足りない
+
+**2026-08-31追加。S0のreference追随性テストで判明。**
+
+現在の manifest（5,431発話 / 63 voice cluster）の split 内訳:
+
+| split | 発話 | voice cluster | うち4秒以上を含む |
+|---|---:|---:|---:|
+| dev-seen | 146 | 32 | 29 |
+| dev-zero-shot | 228 | **3** | **2** |
+| test-zero-shot | 434 | **5** | 4 |
+
+**zero-shot split に話者が3〜5人しかいない。** speaker similarity や
+zero-shot voice cloning の評価は、この人数では統計的に意味を持たない
+（S0のreference追随性テストは2択になった）。
+
+原因は voice cluster 単位で split を切っているため。クラスタ総数が63と
+少ないうちは、zero-shot に回せるクラスタが構造的に少なくなる。
+
+対策（S1までに）:
+
+- データ量を増やしてクラスタ総数を増やす（S1は100〜500時間想定）
+- zero-shot split に回すクラスタ数の**下限を明示する**
+  （06章の評価protocolに「zero-shot話者20人以上」等）
+- それまで zero-shot の数値は **参考値** として扱い、ゲートに使わない
+
 ### GPU確認フックの実効性（2026-08-30 検証）
 
 `.claude/settings.json` に PreToolUse フックを置き、GPUを使うコマンドで

@@ -121,10 +121,23 @@ CER評価が固定reference（`assets/default_reference.wav`）の1話者条件�
 | **in_domain CER が基準線から明確に改善** | **達成**（35.8% -> 28.4%） |
 | textを入れ替えると出力内容が追随 | 達成（未学習52文でCER 28.4%。追随しなければ約100%） |
 | 未学習文でも完全なmemorizationではない | 達成（評価文は学習manifest外。dev-zero-shot も悪化せず） |
-| referenceを入れ替えるとspeaker identityが追随 | `check_reference_following.py` で測定 |
+| **referenceを入れ替えるとspeaker identityが追随** | **達成**（4話者4択で 12/12、自己0.833 vs 他者0.600） |
 | microbatch 1 の peak VRAM と throughput | 達成（4.15 GB / 150 ms/step） |
 | 16 GB で full fine-tuning が載るか | 達成（載る。D-006確定） |
-| 聴取可能な発音改善 | CERが客観指標。実聴取は未実施 |
+| 聴取可能な発音改善 | CERが客観指標。**実聴取は未実施**（音声はartifacts/配下、公開不可） |
+
+### reference 追随性の詳細
+
+同じ text を複数の reference で生成し、生成音声の speaker embedding が
+自分の reference に最も似ているかを測った（`check_reference_following.py`）。
+
+| 条件 | 自己類似度 | 他者類似度 | 差 | argmax正解 |
+|---|---:|---:|---:|---:|
+| dev-seen 4話者 × 3文 | 0.833 | 0.600 | +0.232 | **12/12** |
+| dev-zero-shot 2話者 × 3文 | 0.821 | 0.548 | +0.273 | 6/6 |
+
+zero-shot 側が2話者しかないのは split の制約（[R-013](07-risks-and-decisions.md)）。
+**zero-shot の数値はゲートに使わず参考値とする。**
 
 ### 中止・巻き戻し条件の確認
 

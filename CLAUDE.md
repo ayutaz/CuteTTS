@@ -135,9 +135,9 @@ LMのtoken rateは `12.5 / 2 = 6.25 patch/s`。`--max-decode-length 750` は約1
 「実装した」と「日本語学習が成功した」を混同しないこと。
 07章の意思決定表（D-001〜D-024）は項目を削除せず、状態と理由を追記して更新する。
 
-### 進捗（2026-08-30）
+### 進捗（2026-08-31）
 
-**P0 / P1 / P2 は完了。次は S0（10〜30時間 overfit、GPU必要）。**
+**P0 / P1 / P2 / S0 は完了。次は S1（100〜500時間 PoC）。**
 
 | フェーズ | 状態 | 主要な結論 |
 |---|---|---|
@@ -148,7 +148,8 @@ LMのtoken rateは `12.5 / 2 = 6.25 patch/s`。`--max-decode-length 750` は約1
 | P1d | 完了 | voiceクラスタ **t=0.92**（既定0.70は破綻）、leakage 0件 |
 | P1e | Pass A完了 | 44.5× realtime、外挿 65.3 GB / **239 GPU時間**。Pass BはS2直前 |
 | P2 | 完了 | ゴール7件達成。変異テスト9/9検出。すべてCPUで検証 |
-| S0 | **次はここ** | GPUが要る。ローカルではなく vast.ai を使う（D-023/D-024） |
+| S0 | 完了 | **in_domain CER 35.8% → 28.4%**。reference追随 12/12。7.15hで通過 |
+| S1 | **次はここ** | 100〜500時間。データ拡充が前提（現在7.15h、zero-shot話者3人） |
 
 ### 実装済み
 
@@ -160,6 +161,9 @@ src/cutetts/training/   P1: artifacts, manifest, text_rules, pairing,
 scripts/                reproduce_baseline, analyze_japanese_tokenizer,
                         evaluate_japanese_vae, prepare_japanese_manifest,
                         cache_audio_latents, build_voice_clusters
+                        S0: train_continual, diagnose_flow_loss,
+                            check_reference_following, build_eval_set,
+                            evaluate_japanese_cer
 tools/                  mutation_check（テストが実際に効くかの検証）
 tests/training/         全件PASS（slowマーカーは実checkpointを要する）
 ```
@@ -185,6 +189,17 @@ tests/training/         全件PASS（slowマーカーは実checkpointを要す�
 | stopのclass imbalance | `positive_weight`（重み付き平均） |
 | flow/stopの重み | `stop_weight=1.0` 既定。Stage 0で調整 |
 | condition dropoutの対象 | speaker + reference、既定はjoint |
+
+### S0で判明した落とし穴（再発させない）
+
+- **`PairSampler.sample()` を step ごとに呼ばない**。呼ぶたびにRNGを作り直すので
+  毎回同じペアが返る。1回目のS0は3000step全部が同じ4発話で、
+  flow loss 0.003 は丸暗記だった（R-012）。`iter_pairs()` の stream から引く。
+- **学習ループの損失だけで成否を判断しない**（D-025）。train / dev / 未学習base を
+  同じ経路で測る（`scripts/diagnose_flow_loss.py`）。flow loss は
+  「常に0を出す予測器」が約2.0なので、それより十分小さいかで絶対値を判断する。
+- **zero-shot split には voice cluster が3つしか無い**（R-013）。
+  zero-shot の数値はゲートに使わない。
 
 **packingを触るときの注意**: 行index（`target_batch_index`）と
 sample index（`target_sample_index`）は別物。unpackedでは一致するので
