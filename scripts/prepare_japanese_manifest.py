@@ -149,15 +149,46 @@ def gol_full_accounting(metadata_tsv: Path, generic_ids: frozenset[str],
     }
 
 
-def gol_records(metadata_tsv: Path, tar_dir: Path, generic_ids: frozenset[str]) -> Iterator[Utterance]:
-    """手元にtarがあるgameだけmanifest化する。sample_rateは実ファイルから読む。"""
-    tars = {p.stem: p for p in sorted(tar_dir.glob("*.tar"))}
-    if not tars:
-        return
-    rate_by_game: dict[str, int] = {}
-    for game, path in tars.items():
+_PART_SUFFIX = re.compile(r"_part\d+$")
+
+
+def group_tars_by_game(tar_dir: Path) -> dict[str, list[Path]]:
+    """tarを game_id 単位にまとめる。
+
+    大きいgameは `<game>_part1.tar` / `<game>_part2.tar` に分割されている
+    （602 tar に対し metadata 上の game は 596）。ファイル名をそのまま
+    game_id として扱うと **分割されたgameが丸ごと落ちる**。
+    """
+    groups: dict[str, list[Path]] = {}
+    for path in sorted(tar_dir.glob("*.tar")):
+        groups.setdefault(_PART_SUFFIX.sub("", path.stem), []).append(path)
+    return groups
+
+
+def _index_members(paths: list[Path]) -> dict[str, Path]:
+    """分割gameについて、wavのbasename → それが入っているtar を作る。"""
+    index: dict[str, Path] = {}
+    for path in paths:
         try:
             with tarfile.open(path) as archive:
+                for member in archive:
+                    if member.name.endswith(".wav"):
+                        index[Path(member.name).name] = path
+        except Exception as error:
+            print(f"  [warn] tar走査失敗 {path.name}: {type(error).__name__}", file=sys.stderr)
+    return index
+
+
+def gol_records(metadata_tsv: Path, tar_dir: Path, generic_ids: frozenset[str]) -> Iterator[Utterance]:
+    """手元にtarがあるgameだけmanifest化する。sample_rateは実ファイルから読む。"""
+    groups = group_tars_by_game(tar_dir)
+    if not groups:
+        return
+    rate_by_game: dict[str, int] = {}
+    member_index: dict[str, dict[str, Path]] = {}
+    for game, paths in groups.items():
+        try:
+            with tarfile.open(paths[0]) as archive:
                 for member in archive:
                     if not member.name.endswith(".wav"):
                         continue
@@ -170,6 +201,11 @@ def gol_records(metadata_tsv: Path, tar_dir: Path, generic_ids: frozenset[str]) 
                     break
         except Exception as error:  # 途中まで落ちたtarなどは飛ばす
             print(f"  [warn] tar読み取り失敗 {game}: {type(error).__name__}", file=sys.stderr)
+            continue
+        if len(paths) > 1:
+            member_index[game] = _index_members(paths)
+            print(f"  分割game {game[:12]}…: {len(paths)}本 / "
+                  f"wav {len(member_index[game]):,}件")
     with metadata_tsv.open(encoding="utf-8", newline="") as handle:
         reader = csv.reader(handle, delimiter="\t")
         next(reader, None)
@@ -182,10 +218,16 @@ def gol_records(metadata_tsv: Path, tar_dir: Path, generic_ids: frozenset[str]) 
             except ValueError:
                 continue
             member = file_path.split("/", 1)[1] if "/" in file_path else file_path
+            if game in member_index:
+                container = member_index[game].get(Path(file_path).name)
+                if container is None:      # どのpartにも無いwav
+                    continue
+            else:
+                container = groups[game][0]
             yield Utterance(
                 utterance_id=f"gol:{game}:{Path(file_path).name}",
                 dataset_id="gol",
-                audio_ref=f"{tars[game]}::{member}",
+                audio_ref=f"{container}::{member}",
                 text_raw=text,
                 speaker_id=speaker,
                 duration=duration,
