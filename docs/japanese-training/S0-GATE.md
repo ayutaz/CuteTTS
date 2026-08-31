@@ -147,3 +147,26 @@ zero-shot 側が2話者しかないのは split の制約（[R-013](07-risks-and
 | stop head が学習できず無限生成または早期停止 | なし（stop loss -72%〜-80%） |
 | target/reference leakage による見かけの成功 | なし（`test_leakage.py` で因果性を確認） |
 | in_domain CER が基準線より悪化 | なし（-7.4pt 改善） |
+
+## 成果物の所在と、残っていないもの
+
+ローカルに回収済み（`artifacts/` はgitignore。**音声はコミット・公開しないこと**）:
+
+```text
+artifacts/s0-train/2026-08-30T23-02-51/     学習history（有効な2回目）
+artifacts/s0-diagnose/2026-08-30T23-40-15/  学習後のflow/stop
+artifacts/s0-diagnose/2026-08-30T23-44-47/  未学習baseの同一診断
+artifacts/s0-cer/2026-08-30T23-40-47/       学習後CER + 生成音声
+artifacts/s0-cer/2026-08-30T15-59-54/       基準線CER + 生成音声
+artifacts/s0-refcheck/2026-08-30T23-58-35/  reference追随（4話者4択）
+```
+
+**学習済みcheckpointは残していない。** vast.aiインスタンス破棄時に消えた。
+571MB の転送が約39 KB/s まで落ち、完了に4時間・$0.72 かかる見積もりだったため
+中止した。S1 は base から学習し直すので再利用しない。
+
+再現が必要なら `scripts/train_continual.py` を同じ引数で回せばよい:
+
+```bash
+python scripts/train_continual.py --steps 3000 --batch-size 4 --lr 2e-5   --warmup 100 --save-every 1000 --group-key voice_cluster_id   --condition-dropout 0.1 --out checkpoints/s0 --device cuda
+```
