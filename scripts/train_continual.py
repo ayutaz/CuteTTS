@@ -268,6 +268,29 @@ def main() -> None:
 
     history: list[dict] = []
     evaluations: list[dict] = []
+
+    def run_eval(step: int) -> None:
+        """固定バッチでdevを測って `evaluations` へ積む。"""
+        if not eval_sets:
+            return
+        model.eval()
+        row = {"step": step}
+        for split, batches in eval_sets.items():
+            scores = evaluate(model, batches, flow_copies=args.flow_copies,
+                              stop_weight=args.stop_weight, seed=args.seed)
+            if scores:
+                row[split] = scores
+        model.train()
+        evaluations.append(row)
+        summary = "  ".join(f"{split}: flow={v['flow']:.4f} stop={v['stop']:.4f}"
+                            for split, v in row.items() if isinstance(v, dict))
+        print(f"  [dev] step {step:6d}  {summary}")
+
+    # **学習前に1度測る。** これが無いと、途中のdev値が改善なのか悪化なのか
+    # 判定できない（比較対象が無い）。
+    if args.eval_every and not state.step:
+        run_eval(0)
+
     started = time.perf_counter()
     first_step = state.step   # state.step は save のたびに進むので、開始点は別に持つ
     if first_step:
@@ -311,20 +334,8 @@ def main() -> None:
                   f"stop={row['stop']:.4f} |g|={row['grad_norm']:.2f} lr={lr:.2e} "
                   f"{ms_per_step:.0f} ms/step")
 
-        if args.eval_every and (step + 1) % args.eval_every == 0 and eval_sets:
-            model.eval()
-            row = {"step": step + 1}
-            for split, batches in eval_sets.items():
-                scores = evaluate(model, batches, flow_copies=args.flow_copies,
-                                  stop_weight=args.stop_weight, seed=args.seed)
-                if scores:
-                    row[split] = scores
-            model.train()
-            evaluations.append(row)
-            summary = "  ".join(
-                f"{split}: flow={v['flow']:.4f} stop={v['stop']:.4f}"
-                for split, v in row.items() if isinstance(v, dict))
-            print(f"  [dev] step {step + 1:6d}  {summary}")
+        if args.eval_every and (step + 1) % args.eval_every == 0:
+            run_eval(step + 1)
 
         if args.save_every and (step + 1) % args.save_every == 0:
             state.step = step + 1
