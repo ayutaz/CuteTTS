@@ -65,7 +65,7 @@ step "2/5 moe だけの manifest"
 # **golのtar（215 GB）は再取得しない。** gol_records は tar が無ければ
 # 空を返すので、ここでは moe だけが manifest に入る。
 # gol の latent は既に HF から取得済みで、後で結合する。
-python -u scripts/prepare_japanese_manifest.py --skip-full-accounting \n  --gol-tars /nonexistent --out-dir data/manifests_moe
+python -u scripts/prepare_japanese_manifest.py --skip-full-accounting --gol-tars /nonexistent --out-dir data/manifests_moe
 wc -l data/manifests_moe/all.jsonl
 
 step "3/5 moe の latent cache（既存のgol分はそのまま残る）"
