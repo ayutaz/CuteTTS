@@ -426,12 +426,16 @@ def main() -> None:
     print(f"      {len(pairs)} ペア / leakage なし / "
           f"平均reference {metrics['pairing']['mean_reference_seconds']:.2f} 秒")
 
+    # 片方のdatasetだけを処理することがある（moeだけ足す等）。
+    # 入力が無いときは記録をnullにして、artifact書き出しで落とさない。
+    gol_metadata = Path(args.gol_metadata)
     artifacts.write_run_metadata(
         run_dir, phase="p1d", command=[Path(sys.argv[0]).name] + sys.argv[1:],
         seed=args.seed,
         inputs={
             "gol_metadata": str(args.gol_metadata),
-            "gol_metadata_bytes": Path(args.gol_metadata).stat().st_size,
+            "gol_metadata_bytes": (gol_metadata.stat().st_size
+                                   if gol_metadata.is_file() else None),
             "gol_tars": sorted(p.name for p in Path(args.gol_tars).glob("*.tar")),
             "moe_zips": sorted(p.name for p in Path(args.moe_zips).glob("*.zip")),
         },
