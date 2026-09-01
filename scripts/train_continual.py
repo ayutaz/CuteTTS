@@ -60,6 +60,10 @@ from cutetts.training.prompt import build_voice_clone_prompt
 from cutetts.training.speaker_cache import SpeakerEmbeddingCacheReader
 
 
+REFERENCE_PATCH_CAP = int(30 * 6.25)
+"""referenceに使う最大patch数。推論側の30秒想定に合わせる。"""
+
+
 def load_model(model_dir: Path, device: torch.device, dtype: str) -> CuteTTSModel:
     config = json.loads((model_dir / "config.json").read_text(encoding="utf-8"))
     architecture = dict(config["architecture"])
@@ -79,6 +83,66 @@ def cosine_lr(step: int, *, peak: float, warmup: int, total: int, floor_ratio: f
     progress = (step - warmup) / max(total - warmup, 1)
     progress = min(max(progress, 0.0), 1.0)
     return peak * (floor_ratio + (1 - floor_ratio) * 0.5 * (1 + math.cos(math.pi * progress)))
+
+
+def build_batch(pairs, *, source, speaker_reader, processor, max_length,
+                max_target_patches):
+    """ペア列から `TrainingBatch` と speaker tensor を作る。作れなければ ``None``。"""
+    samples, speakers = [], []
+    for pair in pairs:
+        target = source.patches(pair.target.utterance_id)[:max_target_patches]
+        reference = torch.cat(
+            [source.patches(u.utterance_id) for u in pair.reference_group], dim=0
+        )[:REFERENCE_PATCH_CAP]
+        if target.shape[0] < 2:
+            continue
+        prompt = build_voice_clone_prompt(processor, pair.target.text_raw)
+        # 系列長が max_length を超えないよう target を切る
+        budget = max_length - prompt.text_token_count - 1 - int(reference.shape[0])
+        if budget < 2:
+            continue
+        target = target[: min(int(target.shape[0]), budget + 1)]
+        samples.append(build_training_sample(
+            utterance_id=pair.target.utterance_id, prompt=prompt,
+            reference_latents=reference, target_latents=target))
+        speakers.append(speaker_reader.read(pair.reference_group[0].utterance_id))
+    if not samples:
+        return None
+    return collate(samples), torch.stack(speakers)
+
+
+def build_eval_batches(records, *, seed, batch_size, batches, group_key, **kwargs):
+    """dev評価用の **固定** バッチ列を作る。学習中ずっと同じものを使う。
+
+    毎回ちがうバッチで測ると、損失の変化が「学習の進み」なのか
+    「バッチの難易度差」なのか分からなくなる。
+    """
+    sampler = PairSampler(records, seed=seed, group_key=group_key,
+                          min_utterances_per_group=2, target_reference_seconds=10.0)
+    stream = sampler.iter_pairs()
+    out = []
+    for _ in range(batches):
+        pairs = list(islice(stream, batch_size))
+        assert_no_leakage(pairs)
+        built = build_batch(pairs, **kwargs)
+        if built is not None:
+            out.append(built)
+    return out
+
+
+@torch.no_grad()
+def evaluate(model, batches, *, flow_copies, stop_weight, seed):
+    """固定バッチで flow / stop loss を測る。``model`` の mode は呼び出し側で戻す。"""
+    flow, stop = [], []
+    for batch, speaker in batches:
+        out = training_forward(model, batch, speaker_embeddings=speaker,
+                               flow_copies=flow_copies, stop_weight=stop_weight,
+                               generator=torch.Generator().manual_seed(seed))
+        flow.append(float(out.flow_loss))
+        stop.append(float(out.stop_loss))
+    if not flow:
+        return None
+    return {"flow": sum(flow) / len(flow), "stop": sum(stop) / len(stop)}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -106,6 +170,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--log-every", type=int, default=25)
     parser.add_argument("--save-every", type=int, default=500)
+    parser.add_argument("--eval-every", type=int, default=0,
+                        help="このstep間隔でdevのflow/stop lossを測る。0で無効。"
+                             "長い学習では必ず有効にすること（D-025）")
+    parser.add_argument("--eval-batches", type=int, default=16,
+                        help="dev評価に使う固定バッチ数")
     parser.add_argument("--out", default="checkpoints/s0")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--artifact-root", default="artifacts")
@@ -179,7 +248,26 @@ def main() -> None:
                                       reference=args.condition_dropout, joint=True)
                if args.condition_dropout > 0 else None)
 
+    # dev の固定バッチ。学習ループの損失だけでは成否を判断できない（D-025）。
+    build_kwargs = dict(source=source, speaker_reader=speaker_reader,
+                        processor=processor, max_length=max_length,
+                        max_target_patches=args.max_target_patches)
+    eval_sets: dict[str, list] = {}
+    if args.eval_every:
+        for split in ("dev-seen", "dev-zero-shot"):
+            rows = [r for r in load_manifest(args.manifest)
+                    if r.split == split
+                    and r.utterance_id in latent_reader and r.utterance_id in speaker_reader]
+            if len(rows) < 2:
+                print(f"  dev評価: {split} は record {len(rows)}件のためスキップ")
+                continue
+            eval_sets[split] = build_eval_batches(
+                rows, seed=args.seed + 1, batch_size=args.batch_size,
+                batches=args.eval_batches, group_key=args.group_key, **build_kwargs)
+            print(f"  dev評価: {split} {len(eval_sets[split])} バッチ")
+
     history: list[dict] = []
+    evaluations: list[dict] = []
     started = time.perf_counter()
     first_step = state.step   # state.step は save のたびに進むので、開始点は別に持つ
     if first_step:
@@ -189,32 +277,12 @@ def main() -> None:
         pairs = list(islice(pair_stream, args.batch_size))
         assert_no_leakage(pairs)
 
-        samples, speakers = [], []
-        for pair in pairs:
-            target = source.patches(pair.target.utterance_id)[: args.max_target_patches]
-            reference = torch.cat(
-                [source.patches(u.utterance_id) for u in pair.reference_group], dim=0
-            )[: int(30 * 6.25)]
-            if target.shape[0] < 2:
-                continue
-            prompt = build_voice_clone_prompt(processor, pair.target.text_raw)
-            # 系列長が max_length を超えないよう target を切る
-            budget = max_length - prompt.text_token_count - 1 - int(reference.shape[0])
-            if budget < 2:
-                continue
-            target = target[: min(int(target.shape[0]), budget + 1)]
-            samples.append(build_training_sample(
-                utterance_id=pair.target.utterance_id,
-                prompt=prompt,
-                reference_latents=reference,
-                target_latents=target,
-            ))
-            speakers.append(speaker_reader.read(pair.reference_group[0].utterance_id))
-        if not samples:
+        built = build_batch(pairs, source=source, speaker_reader=speaker_reader,
+                            processor=processor, max_length=max_length,
+                            max_target_patches=args.max_target_patches)
+        if built is None:
             continue
-
-        batch = collate(samples)
-        speaker_tensor = torch.stack(speakers)
+        batch, speaker_tensor = built
 
         lr = cosine_lr(step, peak=args.lr, warmup=args.warmup, total=args.steps)
         for group in optimizer.param_groups:
@@ -243,6 +311,21 @@ def main() -> None:
                   f"stop={row['stop']:.4f} |g|={row['grad_norm']:.2f} lr={lr:.2e} "
                   f"{ms_per_step:.0f} ms/step")
 
+        if args.eval_every and (step + 1) % args.eval_every == 0 and eval_sets:
+            model.eval()
+            row = {"step": step + 1}
+            for split, batches in eval_sets.items():
+                scores = evaluate(model, batches, flow_copies=args.flow_copies,
+                                  stop_weight=args.stop_weight, seed=args.seed)
+                if scores:
+                    row[split] = scores
+            model.train()
+            evaluations.append(row)
+            summary = "  ".join(
+                f"{split}: flow={v['flow']:.4f} stop={v['stop']:.4f}"
+                for split, v in row.items() if isinstance(v, dict))
+            print(f"  [dev] step {step + 1:6d}  {summary}")
+
         if args.save_every and (step + 1) % args.save_every == 0:
             state.step = step + 1
             save_training_state(out_dir, model=model, optimizer=optimizer,
@@ -263,6 +346,7 @@ def main() -> None:
         "phase": "s0-train", "settings": vars(args),
         "train_records": len(usable), "eligible_groups": len(groups),
         "history": history,
+        "evaluations": evaluations,
         "total_seconds": time.perf_counter() - started,
         "checkpoint": str(out_dir), "inference_export": str(out_dir / "inference"),
     })
