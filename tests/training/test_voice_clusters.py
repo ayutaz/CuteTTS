@@ -309,8 +309,12 @@ def test_three_separated_voice_groups_become_three_clusters() -> None:
     assert summary["size_histogram"] == {"2": 3}
 
 
-def test_threshold_is_monotonic_and_partitions_are_nested() -> None:
-    # 既知のcosineを持つ3つの中心: sim(A,C)=0.8, sim(B,C)=0.6, sim(A,B)=0。
+def _chain_profiles():
+    """既知のcosineを持つ3つの中心: sim(A,C)=0.8, sim(B,C)=0.6, sim(A,B)=0。
+
+    A と B は直交（別の声）だが、C が両方に近い。C を中継役にすると
+    単連結では A,B,C が1つになる。
+    """
     basis = orthonormal_voices(2, seed=3)
     centers = {
         "spk-a": basis[0],
@@ -318,19 +322,24 @@ def test_threshold_is_monotonic_and_partitions_are_nested() -> None:
         "spk-c": unit(0.8 * basis[0] + 0.6 * basis[1]),
     }
     reader, records = build_dataset({key: [value] for key, value in centers.items()}, jitter=0.0)
-    profiles = build_profiles(reader, records)
+    return build_profiles(reader, records)
 
-    loose = cluster_speakers(profiles, threshold=0.50)
-    middle = cluster_speakers(profiles, threshold=0.70)
-    tight = cluster_speakers(profiles, threshold=0.90)
 
-    assert len(set(loose.values())) == 1  # 全部つながる
+def test_single_linkage_threshold_is_monotonic_and_partitions_are_nested() -> None:
+    profiles = _chain_profiles()
+
+    def run(threshold: float):
+        return cluster_speakers(profiles, threshold=threshold, linkage="single")
+
+    loose, middle, tight = run(0.50), run(0.70), run(0.90)
+
+    assert len(set(loose.values())) == 1  # 全部つながる（推移的）
     assert len(set(middle.values())) == 2  # A-C だけ残る
     assert len(set(tight.values())) == 3  # 全部ばらける
     assert middle["spk-a"] == middle["spk-c"] != middle["spk-b"]
 
     # 単調性: 閾値を上げるとクラスタ数は減らない。
-    counts = [len(set(cluster_speakers(profiles, threshold=t).values())) for t in (0.3, 0.5, 0.7, 0.9, 0.99)]
+    counts = [len(set(run(t).values())) for t in (0.3, 0.5, 0.7, 0.9, 0.99)]
     assert counts == sorted(counts)
 
     # 入れ子性: 厳しい閾値で同じクラスタなら、緩い閾値でも必ず同じクラスタ。
@@ -339,6 +348,18 @@ def test_threshold_is_monotonic_and_partitions_are_nested() -> None:
             for right in profiles:
                 if finer[left] == finer[right]:
                     assert coarser[left] == coarser[right]
+
+
+def test_average_and_complete_linkage_do_not_chain_through_a_relay() -> None:
+    """中継役 C があっても、直交する A と B を同じクラスタにしない。
+
+    これが単連結との決定的な違い。S1の実データではこの連鎖で
+    45話者・trainの30.5%が1クラスタになった。
+    """
+    profiles = _chain_profiles()
+    for linkage in ("average", "complete"):
+        mapping = cluster_speakers(profiles, threshold=0.50, linkage=linkage)
+        assert mapping["spk-a"] != mapping["spk-b"], linkage
 
 
 def test_cluster_ids_are_deterministic_and_order_independent() -> None:

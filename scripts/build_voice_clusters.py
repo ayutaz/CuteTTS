@@ -30,22 +30,26 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import sys
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 
 from cutetts.training import artifacts, text_rules
 from cutetts.training.manifest import load_manifest, manifest_checksum, summarize, write_manifest
 from cutetts.training.speaker_cache import SpeakerEmbeddingCacheReader
 from cutetts.training.voice_clusters import (
+    DEFAULT_LINKAGE,
     DEFAULT_MAX_ZERO_SHOT_SHARE,
     DEFAULT_SEEN_FRACTION,
     DEFAULT_ZERO_SHOT_FRACTION,
     assign_clusters,
+    assign_split_groups,
     assign_splits_by_cluster,
     build_profiles,
     cluster_members,
     cluster_speakers,
+    cluster_cohesion,
     cluster_summary,
+    cross_split_similarity,
     split_leakage,
     suspicious_speakers,
 )
@@ -61,7 +65,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seen-fraction", type=float, default=DEFAULT_SEEN_FRACTION,
                         help="trainクラスタ内でseen評価へ回す発話の割合")
     parser.add_argument("--max-zero-shot-share", type=float, default=DEFAULT_MAX_ZERO_SHOT_SHARE,
-                        help="1クラスタがzero-shotへ持ち込める発話数の上限（全体比）")
+                        help="1グループがzero-shotへ持ち込める発話数の上限（全体比）")
+    parser.add_argument("--linkage", default=DEFAULT_LINKAGE,
+                        choices=("average", "complete", "single"),
+                        help="voice_cluster の併合条件。既定は完全連結に近い average。"
+                             "split_group は常に single（粗い側）で作る")
     parser.add_argument("--threshold", type=float, default=0.70)
     parser.add_argument("--dispersion-threshold", type=float, default=0.35)
     parser.add_argument("--max-samples-per-speaker", type=int, default=32)
@@ -85,17 +93,31 @@ def main() -> None:
         )
         print(f"profiles: {len(profiles):,} 話者")
 
-        mapping = cluster_speakers(profiles, threshold=args.threshold)
+        # 粒度を2つ作る。用途によって必要な向きが逆になるため（manifest.py 参照）。
+        #   voice_cluster_id … PairSampler の単位。細かく取り、別の声を混ぜない
+        #   split_group_id   … split の単位。粗く取り、同じ声を分断しない
+        mapping = cluster_speakers(profiles, threshold=args.threshold, linkage=args.linkage)
+        group_mapping = cluster_speakers(profiles, threshold=args.threshold, linkage="single")
         summary = cluster_summary(mapping)
         members = cluster_members(mapping)
         suspicious = suspicious_speakers(profiles, dispersion_threshold=args.dispersion_threshold)
 
+        cohesion = cluster_cohesion(profiles, mapping)
+        min_cos = [v["min_cos"] for v in cohesion.values() if v["min_cos"] is not None]
+        if min_cos:
+            worst = min(min_cos)
+            print(f"クラスタ内の最小cos: worst={worst:.3f} "
+                  f"(閾値 {args.threshold})  複数話者クラスタ {len(min_cos)} 件")
+            if worst < args.threshold - 1e-3 and args.linkage == "single":
+                print("  [warn] 単連結のため閾値未満のペアが同居している（連鎖）")
+
         clustered = list(assign_clusters(records, mapping))
+        clustered = list(assign_split_groups(clustered, group_mapping))
 
         # split を **クラスタ単位で切り直す**（D-015）。
         # manifest 段階の split は speaker_id 単位の暫定値で、
         # 「別IDの同じ声」が train と zero-shot へ分かれて漏れる。
-        cluster_ids = [r.voice_cluster_id for r in clustered]
+        cluster_ids = [r.split_group_id or r.voice_cluster_id for r in clustered]
         new_splits = assign_splits_by_cluster(
             cluster_ids, seed=args.seed,
             zero_shot_fraction=args.zero_shot_fraction,
@@ -109,9 +131,24 @@ def main() -> None:
         leaked = split_leakage(cluster_ids, new_splits)
         if leaked:
             raise SystemExit(
-                f"クラスタ単位のsplitに漏れがある: {len(leaked)} 件 "
+                f"split_group単位のsplitに漏れがある: {len(leaked)} 件 "
                 f"（例 {list(leaked.items())[:3]}）")
-        print("split を voice cluster 単位へ切り直した（漏れ 0 件）")
+
+        # voice_cluster が split をまたいでいないかも確認する
+        pairs = defaultdict(set)
+        for record, split in zip(clustered, new_splits):
+            pairs[record.voice_cluster_id].add(split)
+        straddling = {c: sorted(s) for c, s in pairs.items() if c and len(s) > 1
+                      and len({x for x in s if "zero-shot" in x}) and len(s - {x for x in s if "zero-shot" in x})}
+        if straddling:
+            raise SystemExit(f"voice_clusterがsplitをまたいでいる: {len(straddling)} 件")
+
+        speaker_splits = {r.speaker_id: s for r, s in zip(clustered, new_splits)}
+        residual = cross_split_similarity(profiles, speaker_splits)
+        print(f"境界をまたぐ話者centroidの最大cos: {residual['max_cos']} "
+              f"(cos>=0.92 のペア {residual['pairs_at_92']})")
+
+        print("split を split_group 単位へ切り直した（漏れ 0 件）")
         for name in sorted(set(before) | set(after)):
             print(f"  {name:16s} {before.get(name, 0):8,} -> {after.get(name, 0):8,}")
 

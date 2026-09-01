@@ -107,7 +107,28 @@ class Utterance:
     reading: str | None = None
 
     voice_cluster_id: str | None = None
-    """Speaker Encoder embeddingのクラスタID。zero-shot splitはこちらで切る。"""
+    """Speaker Encoder embeddingのクラスタID。**完全連結**で作る「同じ声」の単位。
+
+    :class:`~cutetts.training.pairing.PairSampler` が reference と target を
+    選ぶ単位。クラスタ内の全ペアが閾値を満たすので、別の声が混ざらない。
+    """
+
+    split_group_id: str | None = None
+    """split を切る単位。**単連結**で作る、より粗いグループ。
+
+    ``voice_cluster_id`` より粗く、1つの split_group が複数の voice_cluster を含む。
+    「同じ声かもしれない話者」を1つに寄せることで、同じ声が train と zero-shot へ
+    分かれるのを防ぐ（D-015）。
+
+    2種類必要な理由は非対称な失敗にある:
+
+    * PairSampler の単位が粗いと、別の声を reference にして学習する
+      （「このreferenceの声で別の声を出せ」）
+    * split の単位が細かいと、同じ声が train と zero-shot に現れて
+      zero-shot が zero-shot でなくなる
+
+    片方の粒度では両方を同時に満たせないため、単位を分ける。
+    """
 
     quality_score: float | None = None
     """moeの speechMOS 等。gol側は現状 ``None``。"""

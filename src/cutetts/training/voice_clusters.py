@@ -64,10 +64,16 @@ from cutetts.training.manifest import Utterance
 
 __all__ = [
     "DEFAULT_CLUSTER_THRESHOLD",
+    "DEFAULT_LINKAGE",
+    "LINKAGE_MODES",
+    "cluster_cohesion",
     "DEFAULT_MAX_ZERO_SHOT_SHARE",
     "DEFAULT_SEEN_FRACTION",
     "DEFAULT_ZERO_SHOT_FRACTION",
+    "SPLIT_GROUP_PREFIX",
+    "assign_split_groups",
     "assign_splits_by_cluster",
+    "cross_split_similarity",
     "split_leakage",
     "DEFAULT_DISPERSION_THRESHOLD",
     "DEFAULT_MAX_SAMPLES_PER_SPEAKER",
@@ -89,6 +95,8 @@ SPEAKER_EMBEDDING_DIM = 256
 
 #: :func:`cluster_speakers` の既定閾値（提案値。module docstring参照）。
 DEFAULT_CLUSTER_THRESHOLD = 0.70
+_MAX_AGGLOMERATIVE_SPEAKERS = 30_000
+"""平均/完全連結は [N,N] を実体化する。N=30,000 で約1.8 GB。"""
 
 #: :func:`suspicious_speakers` の既定閾値（提案値。module docstring参照）。
 DEFAULT_DISPERSION_THRESHOLD = 0.35
@@ -102,6 +110,38 @@ VOICE_CLUSTER_PREFIX = "vc:"
 # 類似度をblockで計算するときの行数。N=19,349（gol実測）でも
 # 512 x 19,349 x 4 byte = 約40 MBに収まり、[N,N]を実体化せずに済む。
 _SIMILARITY_BLOCK_ROWS = 512
+
+LINKAGE_MODES = ("average", "complete", "single")
+DEFAULT_LINKAGE = "complete"
+"""既定は完全連結。**クラスタ内の全ペアが閾値以上**であることを保証する。
+
+単連結（``"single"``）は **推移的に併合する**ため、A~B と B~C が閾値を満たせば
+cos(A,C) が低くても A,B,C が1つになる。話者数が増えるとこの連鎖が効き、
+S1の実データ（1,110話者）では **45話者・86.1時間・trainの30.5%** が
+1クラスタになった。そのクラスタのcentroid間で cos>=0.92 を満たすペアは
+3.4%（最小0.614）しかなく、大半が別の声だった。
+
+voiceクラスタは :class:`~cutetts.training.pairing.PairSampler` が
+reference と target を選ぶ単位なので、別の声が混ざると
+**「このreferenceの声で別の声を出せ」と教えることになる**。
+S1の実データではペアの34.8%がこの状態だった。
+
+完全連結なら「閾値未満のペアが同居しない」ことが構成上保証される。
+S1実測（閾値0.92、1,110話者）:
+
+===================== ========== ============ ==============
+linkage               クラスタ数  最大話者数   ペア不一致
+===================== ========== ============ ==============
+single                     974           42        26.9%
+average                  1,006            4        13.1%
+complete                 1,021            2         8.3%
+===================== ========== ============ ==============
+
+完全連結の残る8.3%は全ペアが cos>=0.92 なので「別IDの同じ声」であり、
+D-015が意図した動作。分割しすぎる副作用は
+:attr:`~cutetts.training.manifest.Utterance.split_group_id`
+（単連結の粗いグループ）がsplit側で吸収する。
+"""
 
 # ゼロ長ベクトルを弾く閾値。
 _NORM_EPS = 1e-12
@@ -326,38 +366,105 @@ class _UnionFind:
         self.size[left_root] += self.size[right_root]
 
 
+def _agglomerative_groups(matrix: "np.ndarray", threshold: float, linkage: str) -> list[list[int]]:
+    """平均連結／完全連結で凝集型クラスタリングし、メンバのindex集合を返す。
+
+    ``matrix`` は行が単位ベクトルの重心 ``[N, D]``。
+
+    平均連結のクラスタ間類似度は、単位ベクトルの **和** から厳密に計算できる::
+
+        mean_{a in A, b in B} cos(a, b) = (sum_A . sum_B) / (|A| * |B|)
+
+    完全連結は Lance-Williams の更新で ``sim(C, X) = min(sim(A, X), sim(B, X))``。
+    どちらも「閾値を満たすペアが無くなったら停止」する。
+    """
+    count = matrix.shape[0]
+    if count > _MAX_AGGLOMERATIVE_SPEAKERS:
+        raise ValueError(
+            f"{linkage} linkage は [N,N] を実体化するため N<={_MAX_AGGLOMERATIVE_SPEAKERS} "
+            f"を想定している（N={count}）。大規模では linkage='single' を使うこと。"
+        )
+    similarity = np.clip(matrix @ matrix.T, -1.0, 1.0).astype(np.float32)
+    similarity = (similarity + similarity.T) * 0.5
+    np.fill_diagonal(similarity, -np.inf)
+
+    sums = matrix.astype(np.float32).copy()
+    sizes = np.ones(count, dtype=np.float32)
+    active = np.ones(count, dtype=bool)
+    groups: list[list[int]] = [[index] for index in range(count)]
+
+    while True:
+        flat = int(np.argmax(similarity))
+        left, right = divmod(flat, count)
+        if not np.isfinite(similarity[left, right]) or similarity[left, right] < threshold:
+            break
+        # right を left へ併合する
+        groups[left].extend(groups[right])
+        groups[right] = []
+        sums[left] += sums[right]
+        sizes[left] += sizes[right]
+        active[right] = False
+        similarity[right, :] = -np.inf
+        similarity[:, right] = -np.inf
+
+        if linkage == "average":
+            updated = (sums @ sums[left]) / (sizes * sizes[left])
+        else:  # complete
+            updated = np.minimum(similarity[left], similarity[right])
+        updated[~active] = -np.inf
+        updated[left] = -np.inf
+        similarity[left, :] = updated
+        similarity[:, left] = updated
+
+    return [members for members in groups if members]
+
+
 def cluster_speakers(
     profiles: dict[str, SpeakerProfile],
     *,
     threshold: float = DEFAULT_CLUSTER_THRESHOLD,
+    linkage: str = DEFAULT_LINKAGE,
 ) -> dict[str, str]:
-    """重心のcosine類似度で単連結クラスタリングする。
+    """重心のcosine類似度でクラスタリングする。
 
     Args:
         profiles: :func:`build_profiles` の結果。
-        threshold: この値 **以上** の類似度を持つspeaker同士を同一クラスタへ併合する。
+        threshold: この値 **以上** の類似度を持つクラスタ同士を併合する。
+        linkage: 併合条件。``"average"``（既定）はクラスタ間の平均cos、
+            ``"complete"`` は最小cos、``"single"`` は1ペアでも閾値を満たせば併合。
+            単連結は推移的なので連鎖で巨大クラスタを作る（:data:`DEFAULT_LINKAGE` 参照）。
 
     Returns:
         ``speaker_id -> cluster_id``。``profiles`` の全speakerが必ず含まれ、
         どこにも併合されなかったspeakerは自分1人のクラスタになる。
 
     Raises:
-        ValueError: ``threshold`` が非有限のとき。
+        ValueError: ``threshold`` が非有限のとき、``linkage`` が未知のとき。
 
     Notes:
-        cluster_idは ``"vc:<クラスタ内で辞書順最小のspeaker_id>"``。連結成分の最小要素は
-        併合順に依存しないので、同じ入力なら常に同じIDになる。単連結（推移的）なので、
-        ``threshold`` を下げると必ず併合が進み、上げると必ず分割が細かくなる
-        （partitionは refinement 関係になる）。比較回数は ``O(N^2)`` だが、
-        ``[N,N]`` は実体化せずblockごとに計算する。
+        cluster_idは ``"vc:<クラスタ内で辞書順最小のspeaker_id>"``。同じ入力なら
+        併合順に依存せず常に同じIDになる。``threshold`` を下げると併合が進み、
+        上げると分割が細かくなる（partitionは refinement 関係）。
+        単連結は ``[N,N]`` を実体化せずblockごとに計算するが、
+        平均／完全連結は ``[N,N]`` を持つ（:data:`_MAX_AGGLOMERATIVE_SPEAKERS` 参照）。
     """
     if not np.isfinite(threshold):
         raise ValueError("threshold must be a finite number.")
+    if linkage not in LINKAGE_MODES:
+        raise ValueError(f"linkage must be one of {LINKAGE_MODES}, got {linkage!r}")
 
     speaker_ids, matrix = _stack_centroids(profiles)
     count = len(speaker_ids)
     if count == 0:
         return {}
+
+    if linkage != "single":
+        labels: dict[str, str] = {}
+        for members in _agglomerative_groups(matrix, threshold, linkage):
+            cluster_id = min(speaker_ids[index] for index in members)
+            for index in members:
+                labels[speaker_ids[index]] = f"{VOICE_CLUSTER_PREFIX}{cluster_id}"
+        return labels
 
     union_find = _UnionFind(count)
     for start in range(0, count, _SIMILARITY_BLOCK_ROWS):
@@ -581,3 +688,110 @@ def split_leakage(cluster_ids: Sequence[str], splits: Sequence[str]) -> dict[str
     zero = {"dev-zero-shot", "test-zero-shot"}
     return {cluster_id: sorted(values) for cluster_id, values in seen.items()
             if (values & zero) and (values - zero)}
+
+
+def cluster_cohesion(
+    profiles: dict[str, SpeakerProfile],
+    mapping: dict[str, str],
+) -> dict[str, dict]:
+    """クラスタごとの内部凝集度を測る。連鎖が残っていないかの検証に使う。
+
+    Args:
+        profiles: :func:`build_profiles` の結果。
+        mapping: :func:`cluster_speakers` の結果。
+
+    Returns:
+        ``cluster_id -> {"speakers", "min_cos", "mean_cos"}``。
+        話者が1人のクラスタは ``min_cos`` / ``mean_cos`` が ``None``。
+
+    Notes:
+        ``min_cos`` が閾値を大きく下回るクラスタは、中継役を経由して繋がった
+        「別の声の寄せ集め」である可能性が高い。単連結ではこれが起こりうる。
+    """
+    members: dict[str, list[str]] = defaultdict(list)
+    for speaker_id, cluster_id in mapping.items():
+        if speaker_id in profiles:
+            members[cluster_id].append(speaker_id)
+
+    report: dict[str, dict] = {}
+    for cluster_id, speakers in members.items():
+        if len(speakers) < 2:
+            report[cluster_id] = {"speakers": len(speakers), "min_cos": None, "mean_cos": None}
+            continue
+        block = np.stack([profiles[s].centroid for s in speakers]).astype(np.float32)
+        similarity = np.clip(block @ block.T, -1.0, 1.0)
+        upper = similarity[np.triu_indices(len(speakers), 1)]
+        report[cluster_id] = {
+            "speakers": len(speakers),
+            "min_cos": float(upper.min()),
+            "mean_cos": float(upper.mean()),
+        }
+    return report
+
+
+SPLIT_GROUP_PREFIX = "sg:"
+
+
+def assign_split_groups(
+    records: Iterable[Utterance],
+    mapping: dict[str, str],
+) -> Iterator[Utterance]:
+    """``split_group_id`` を埋めたrecordをyieldする。
+
+    Args:
+        records: manifestのrecord。
+        mapping: **単連結**の :func:`cluster_speakers` 結果
+            （``linkage="single"``）。``voice_cluster_id`` 用の
+            完全連結マッピングとは別に作ること。
+
+    Yields:
+        ``split_group_id`` を差し替えたrecord。speaker_idがmappingに無ければ
+        元のrecordをそのまま返す。
+    """
+    for record in records:
+        group_id = mapping.get(record.speaker_id)
+        if group_id is None:
+            yield record
+        else:
+            yield dataclasses.replace(
+                record, split_group_id=group_id.replace(VOICE_CLUSTER_PREFIX,
+                                                        SPLIT_GROUP_PREFIX, 1))
+
+
+def cross_split_similarity(
+    profiles: dict[str, SpeakerProfile],
+    speaker_splits: dict[str, str],
+    *,
+    zero_shot_splits: Iterable[str] = ("dev-zero-shot", "test-zero-shot"),
+) -> dict:
+    """zero-shot と train 側で、話者centroidがどれだけ似ているかを測る。
+
+    split を細かい単位で切ると「同じ声」が両側に現れる。この関数はその
+    残留漏れを検出する。``max_cos`` が閾値以上なら、同じ声が境界をまたいでいる。
+
+    Args:
+        profiles: :func:`build_profiles` の結果。
+        speaker_splits: ``speaker_id -> split``。
+        zero_shot_splits: zero-shot 扱いする split 名。
+
+    Returns:
+        ``{"max_cos", "train_speakers", "zero_shot_speakers", "pairs_at_92"}``。
+        どちらかの側が空なら ``max_cos`` は ``None``。
+    """
+    zero = set(zero_shot_splits)
+    train_ids = [s for s, split in speaker_splits.items()
+                 if split not in zero and s in profiles]
+    zero_ids = [s for s, split in speaker_splits.items()
+                if split in zero and s in profiles]
+    if not train_ids or not zero_ids:
+        return {"max_cos": None, "train_speakers": len(train_ids),
+                "zero_shot_speakers": len(zero_ids), "pairs_at_92": 0}
+    left = np.stack([profiles[s].centroid for s in train_ids]).astype(np.float32)
+    right = np.stack([profiles[s].centroid for s in zero_ids]).astype(np.float32)
+    similarity = np.clip(left @ right.T, -1.0, 1.0)
+    return {
+        "max_cos": float(similarity.max()),
+        "train_speakers": len(train_ids),
+        "zero_shot_speakers": len(zero_ids),
+        "pairs_at_92": int((similarity >= 0.92).sum()),
+    }
