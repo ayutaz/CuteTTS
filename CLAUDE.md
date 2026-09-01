@@ -137,7 +137,7 @@ LMのtoken rateは `12.5 / 2 = 6.25 patch/s`。`--max-decode-length 750` は約1
 
 ### 進捗（2026-09-01）
 
-**P0 / P1 / P2 / S0 完了。S1は前処理まで完了し、学習が次。**
+**P0 / P1 / P2 / S0 完了。S1は学習19回を試行したが目標未達。**
 
 | フェーズ | 状態 | 主要な結論 |
 |---|---|---|
@@ -149,7 +149,7 @@ LMのtoken rateは `12.5 / 2 = 6.25 patch/s`。`--max-decode-length 750` は約1
 | P1e | Pass A完了 | 44.5× realtime、外挿 65.3 GB / **239 GPU時間**。Pass BはS2直前 |
 | P2 | 完了 | ゴール7件達成。変異テスト9/9検出。すべてCPUで検証 |
 | S0 | 完了 | **in_domain CER 35.8% → 28.4%**。reference追随 12/12。7.15hで通過 |
-| S1 | 前処理完了 | **265.7h / 894 cluster / zero-shot 119 cluster**。学習が次 |
+| S1 | **目標未達** | 19回試行。最良 **30.8%**（密クラスタ17.5h）。S0の28.4%に届かず |
 
 ### 実装済み
 
@@ -219,6 +219,11 @@ S1のデータは [tts-dataset/cutetts-ja-latents](https://huggingface.co/datase
   **同じ声がtrainとzero-shotに現れる**（実測15話者）。片方の粒度では両立しない。
 - **out_of_domain はデータ量では直らない**（D-026）。golのcorpusで
   数字を含む文は1.3%。S1のゴールから外した。
+- **データはクラスタ密度で選ぶ**（D-029 / R-018）。`PairSampler` はクラスタ内から
+  ref/target を引くので、1クラスタ median 5発話では組み合わせが枯渇する。
+  **305時間より、密なクラスタの17時間のほうが良い**（31.8% vs 30.8%）。
+- **CERは必ず測る**（R-015）。flow loss は CER と逆相関することがある。
+  20,000 step実行では flow 最良の点で CER が最悪（54.2%）だった。
 
 **packingを触るときの注意**: 行index（`target_batch_index`）と
 sample index（`target_sample_index`）は別物。unpackedでは一致するので

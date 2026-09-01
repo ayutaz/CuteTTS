@@ -763,7 +763,19 @@ stop headが学習できず無限生成または早期停止、NaN/overflowの�
 
 日本語品質とzero-shot voice cloningの成立を確認し、S2へ拡大する構成を1つに絞る。
 
-### 状態: 前処理完了（2026-09-01）。学習は未着手
+### 状態: 学習を19回試行。**目標未達**（2026-09-01）
+
+**305時間で学習しても、S0（7.15時間）の 28.4% に届かない。**
+S1系の最良は **30.8%**（密なクラスタ17.5時間）。
+
+原因は2つに絞れた（[R-018](07-risks-and-decisions.md) / [R-019](07-risks-and-decisions.md)）:
+
+1. **クラスタ密度**。S1は1クラスタ median 5発話で、`PairSampler` が
+   組み合わせを作れない。密なクラスタに絞ると 36.8% → **30.8%**
+2. **S0データ固有の性質**（未解明）。混ぜると 29.6%（median 25.8%）まで届く
+
+**データ量は効かない。** 305h でも 31.8% が上限で、7.15h の 28.6% に劣る。
+step数・moe比率・話者あたりの学習量も棄却済み。詳細は [RESULTS.md](RESULTS.md)。
 
 データは [tts-dataset/cutetts-ja-latents](https://huggingface.co/datasets/tts-dataset/cutetts-ja-latents)
 （gated: manual）に置いた。以降のインスタンスは約2 GBの取得だけで学習できる。
