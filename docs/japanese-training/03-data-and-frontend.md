@@ -1,6 +1,6 @@
 # データセットと日本語frontend
 
-最終更新: 2026-08-31
+最終更新: 2026-09-01
 
 ## 0. 現状（2026-08-31）
 
@@ -9,10 +9,12 @@ manifest と前処理は実装済みで、S0 まで動いています。
 | 項目 | 実績 |
 |---|---|
 | manifest | `data/manifests/all_clustered.jsonl`（`scripts/prepare_japanese_manifest.py`） |
-| 実際に学習へ投入できた量 | **5,431発話 / 7.15時間 / 63 voice cluster**（cache済みのぶん） |
+| S1でlatent cache済み | **196,606発話 / 318.6時間 / 1,021 voice cluster** |
+| うち train | 159,964発話 / **265.7時間** / 894 cluster |
+| S0でlatent cache済み（参考） | 5,431発話 / 7.15時間 / 63 cluster |
 | accepted（cache未実施を含む） | 10,466.4時間 / 18,279話者ID |
 | frontend | **raw text（J0）のみ**。S0はこれで CER 35.8% → 28.4% |
-| split | voice cluster単位。zero-shot は3クラスタしかない（[R-013](07-risks-and-decisions.md)） |
+| split | `split_group_id`（単連結）単位。zero-shot は **119クラスタ**（R-013は解消） |
 
 **J1（normalized）以降は未実施。** S0で out_of_domain CER が
 74.7% → 76.4% と改善しなかったため、数字・固有名詞の読み対応は

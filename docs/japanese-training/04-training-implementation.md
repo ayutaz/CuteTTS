@@ -1,6 +1,6 @@
 # 学習コード復元・実装計画
 
-最終更新: 2026-08-31
+最終更新: 2026-09-01
 
 ## 1. 現在の境界
 
@@ -234,6 +234,8 @@ scripts/
   S0     build_eval_set, evaluate_japanese_cer, train_continual,
          diagnose_flow_loss, check_reference_following,
          benchmark_training_memory, vastai_bootstrap.sh
+  S1     measure_asr_floor（ASRの誤り床）, s1_preprocess.sh（vast.ai上で
+         DL→manifest→latent cache→cluster→HFへupload を完結させる）
 
 src/cutetts/training/
   P1     artifacts, manifest, text_rules, pairing, latents,
@@ -274,6 +276,9 @@ tools/                 mutation_check（テストが実際に効くかの検証�
 |---|---|---|
 | 条件付けの因果性 | `test_leakage.py` | target patch i を予測する hidden が patch i を見ていないこと。摂動の影響行列が厳密に上三角になることを確認する |
 | sampler が進むこと | `test_pair_stream.py` | `PairSampler.sample()` を毎step呼ぶと同じペアが返る。200step引けば全発話に触れることを固定 |
+| クラスタの粒度 | `test_linkage_and_split_groups.py` | 完全連結が全ペア閾値以上を保証すること、voice_clusterがsplit_groupに収まること（R-014） |
+| splitの単位 | `test_cluster_splits.py` | 1クラスタが1つのsplitにだけ現れること。検出器自体が働くことも確認する |
+| 分割tarの扱い | `test_gol_split_tars.py` | `_partN` に分かれたgameを落とさないこと |
 | 損失の絶対値 | `scripts/diagnose_flow_loss.py` | 「条件付けを使わない予測器（常に0）」の loss（約2.0）を併記し、何に対して小さいのかを示す |
 | train と dev の乖離 | 同上 | 記憶と汎化を切り分ける。未学習baseも同じ経路で測る |
 

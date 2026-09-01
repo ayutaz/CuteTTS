@@ -133,11 +133,11 @@ LMのtoken rateは `12.5 / 2 = 6.25 patch/s`。`--max-decode-length 750` は約1
 
 文書は情報を **確認済み / 決定済み / 提案 / 未確定** の4状態で区別する規約がある。
 「実装した」と「日本語学習が成功した」を混同しないこと。
-07章の意思決定表（D-001〜D-024）は項目を削除せず、状態と理由を追記して更新する。
+07章の意思決定表（D-001〜D-027）は項目を削除せず、状態と理由を追記して更新する。
 
-### 進捗（2026-08-31）
+### 進捗（2026-09-01）
 
-**P0 / P1 / P2 / S0 は完了。次は S1（100〜500時間 PoC）。**
+**P0 / P1 / P2 / S0 完了。S1は前処理まで完了し、学習が次。**
 
 | フェーズ | 状態 | 主要な結論 |
 |---|---|---|
@@ -149,7 +149,7 @@ LMのtoken rateは `12.5 / 2 = 6.25 patch/s`。`--max-decode-length 750` は約1
 | P1e | Pass A完了 | 44.5× realtime、外挿 65.3 GB / **239 GPU時間**。Pass BはS2直前 |
 | P2 | 完了 | ゴール7件達成。変異テスト9/9検出。すべてCPUで検証 |
 | S0 | 完了 | **in_domain CER 35.8% → 28.4%**。reference追随 12/12。7.15hで通過 |
-| S1 | **次はここ** | 100〜500時間。データ拡充が前提（現在7.15h、zero-shot話者3人） |
+| S1 | 前処理完了 | **265.7h / 894 cluster / zero-shot 119 cluster**。学習が次 |
 
 ### 実装済み
 
@@ -157,16 +157,21 @@ LMのtoken rateは `12.5 / 2 = 6.25 patch/s`。`--max-decode-length 750` は約1
 src/cutetts/training/   P1: artifacts, manifest, text_rules, pairing,
                             latents, speaker_cache, voice_clusters
                         P2: objectives, collator, dataset, forward,
-                            packing, checkpointing
+                            packing, checkpointing, prompt
 scripts/                reproduce_baseline, analyze_japanese_tokenizer,
                         evaluate_japanese_vae, prepare_japanese_manifest,
                         cache_audio_latents, build_voice_clusters
                         S0: train_continual, diagnose_flow_loss,
                             check_reference_following, build_eval_set,
                             evaluate_japanese_cer
+                        S1: measure_asr_floor, s1_preprocess.sh
 tools/                  mutation_check（テストが実際に効くかの検証）
 tests/training/         全件PASS（slowマーカーは実checkpointを要する）
 ```
+
+S1のデータは [tts-dataset/cutetts-ja-latents](https://huggingface.co/datasets/tts-dataset/cutetts-ja-latents)
+（public / **gated: manual**）にある。約2 GBの取得だけで学習を開始できる。
+**音声そのものは置いていない**（latentは復元可能なので同じ扱い）。
 
 実行手順は `.claude/skills/cutetts-ja-pipeline/SKILL.md` にまとめてある。
 
@@ -198,8 +203,22 @@ tests/training/         全件PASS（slowマーカーは実checkpointを要す�
 - **学習ループの損失だけで成否を判断しない**（D-025）。train / dev / 未学習base を
   同じ経路で測る（`scripts/diagnose_flow_loss.py`）。flow loss は
   「常に0を出す予測器」が約2.0なので、それより十分小さいかで絶対値を判断する。
-- **zero-shot split には voice cluster が3つしか無い**（R-013）。
-  zero-shot の数値はゲートに使わない。
+- **CERには約10%の床がある**。人間の実音声を同じ経路で測ると 10.4%。
+  S0の28.4%を「0%が理想」として読まない。TTS由来は約18pt。
+- ~~zero-shot split の話者不足（R-013）~~ → S1前処理で解消（119 cluster）。
+
+### S1で判明した落とし穴（再発させない）
+
+- **golのtarは `_partN` に分割されている**。ファイル名をそのまま game_id に
+  使うと、分割されたgameが **エラーも出さずに丸ごと落ちる**。
+  S1では5 game中2 game（170時間・52%）が消えていた。
+- **クラスタの粒度は用途ごとに逆向きの要求を持つ**（R-014 / D-027）。
+  `voice_cluster_id`（完全連結・細かい）は PairSampler の単位で、粗いと
+  **別の声をreferenceにして学習する**（S1実測で26.9%）。
+  `split_group_id`（単連結・粗い）は split の単位で、細かいと
+  **同じ声がtrainとzero-shotに現れる**（実測15話者）。片方の粒度では両立しない。
+- **out_of_domain はデータ量では直らない**（D-026）。golのcorpusで
+  数字を含む文は1.3%。S1のゴールから外した。
 
 **packingを触るときの注意**: 行index（`target_batch_index`）と
 sample index（`target_sample_index`）は別物。unpackedでは一致するので

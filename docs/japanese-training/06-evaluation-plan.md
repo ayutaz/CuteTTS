@@ -1,6 +1,6 @@
 # 評価計画
 
-最終更新: 2026-08-31
+最終更新: 2026-09-01
 
 ## 1. 評価の原則
 
@@ -120,16 +120,20 @@ ASR modelとnormalization ruleをversion固定します。ASR誤りとTTS誤り�
 - near-domain zero-shot
 - out-of-domain zero-shot
 
-**必要な話者数（R-013・2026-08-31追加）**
+**必要な話者数（R-013・2026-08-31追加、2026-09-01達成）**
 
-| split | 下限 | 理由 |
-|---|---:|---|
-| zero-shot | **20 voice cluster以上** | S0時点で3人しかなく、reference追随テストが2択になった |
-| seen | 20 voice cluster以上 | 同上 |
+| split | 下限 | S0 | S1 |
+|---|---:|---:|---:|
+| zero-shot | **20 voice cluster以上** | 3 ❌ | **119** ✅ |
+| seen | 20 voice cluster以上 | 32 ✅ | **531** ✅ |
 
 この下限を満たさないうちは、**speaker similarity の数値をゲートに使わない**（参考値扱い）。
-voice cluster単位でsplitを切っているため、クラスタ総数が少ないと
-zero-shotに回せる話者が構造的に不足する。
+S0のzero-shot値は参考値のまま据え置く。S1からはゲートに使える。
+
+**splitは `split_group_id`（単連結の粗いグループ）単位で切る（D-027）。**
+`voice_cluster_id`（完全連結の細かいクラスタ）で切ると、同じ声が
+train と zero-shot に分かれて zero-shot が zero-shot でなくなる。
+実測では zero-shot 137話者中15人が train 側と cos>=0.92 だった（R-014）。
 
 ### 指標
 

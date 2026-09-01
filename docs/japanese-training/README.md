@@ -1,6 +1,6 @@
 # CuteTTS 日本語継続学習
 
-最終更新: 2026-08-31
+最終更新: 2026-09-01
 
 ## 目的
 
@@ -29,15 +29,17 @@
 - **P1e: 前処理パス Pass A**（6,112発話、外挿 65.3 GB / 239 GPU時間）
 - **P2: 学習forward復元**（flow-matching loss、stop target、packing、trainer。変異テスト9/9検出）
 - **S0: 10〜30時間 overfit** → **主ゲート通過**。in_domain CER **35.8% → 28.4%**
-- 実装: `src/cutetts/training/` 7モジュール + `scripts/` 10本、**テスト全件PASS**
+- **ASRの誤り床を測定**（人間の実音声で CER 10.4%）。CERを0%基準で読まない根拠
+- **S1の前処理**（gol 5ゲーム・**265.7時間**・1,197話者ID）。成果物は
+  [tts-dataset/cutetts-ja-latents](https://huggingface.co/datasets/tts-dataset/cutetts-ja-latents)（gated: manual）
+- 実装: `src/cutetts/training/` 15モジュール + `scripts/` 12本、**テスト全件PASS**
 
 数値の一覧は [実測結果まとめ](RESULTS.md)、S0のゲートと結果は [S0-GATE.md](S0-GATE.md) を参照。
 
 ### 未実施
 
-- **S1: 100〜500時間 PoC** ← 次はここ。**データ拡充が前提**（現在7.15時間）
+- **S1: 100〜500時間 PoC の学習** ← 次はここ。**前処理は完了済み**（265.7時間）
 - P1e Pass B（gol全体7 TB。S2直前まで実施しない）
-- zero-shot split の話者数確保（現在3人。[R-013](07-risks-and-decisions.md)）
 - 英語・中国語のforgetting用の固定評価set
 - 日本語母語話者による主観評価（S0の生成音声は `artifacts/` にある）
 - モデル公開範囲の決定（R-009の残件）
@@ -47,6 +49,12 @@
 - **日本語継続学習は成立する。** 7.15時間・3000step・9分でCERが7.4pt改善した。
 - **未学習baseが既に部分的な日本語を出す。** 「音声が出る」はゲートにならない。
 - **out-of-domain（数字・固有名詞）は改善しない。** 74.7% → 76.4%（[R-010](07-risks-and-decisions.md)）。
+  golのcorpusで数字を含む文は1.3%しかなく、**データ量では解決しない**。S1のゴールから外した（D-026）。
+- **CERには約10%の床がある。** 人間の実音声を同じ経路で測ると 10.4%。
+  S0の28.4%のうちTTS由来は約18pt。
+- **クラスタの粒度は用途ごとに逆向きの要求を持つ**（[R-014](07-risks-and-decisions.md)）。
+  PairSamplerの単位が粗いと別の声をreferenceにして学習し、splitの単位が細かいと
+  同じ声がtrainとzero-shotに現れる。単位を2つに分けた（D-027）。
 - **学習ループの損失だけでは成否を判断できない。** 1回目の学習は同じ4発話を
   3000step繰り返しており、loss 0.003 は丸暗記だった（[R-012](07-risks-and-decisions.md)）。
 

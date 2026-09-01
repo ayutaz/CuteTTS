@@ -1,11 +1,11 @@
 ---
 name: cutetts-ja-pipeline
-description: Use when running, resuming, or debugging any CuteTTS Japanese continual-training phase (P0 baseline, P1b tokenizer, P1c VAE, P1d manifest, P1e latent cache, S0 training and CER evaluation) in this repository — covers setup, the venv, GPU rules, running jobs on vast.ai, exact commands with their inputs and outputs, and the traps that make these scripts silently produce wrong results.
+description: Use when running, resuming, or debugging any CuteTTS Japanese continual-training phase (P0 baseline, P1b tokenizer, P1c VAE, P1d manifest, P1e latent cache, S0 training and CER evaluation, S1 preprocessing on vast.ai) in this repository — covers setup, the venv, GPU rules, running jobs on vast.ai, publishing preprocessed data to Hugging Face, exact commands with their inputs and outputs, and the traps that make these scripts silently produce wrong results.
 ---
 
 # CuteTTS 日本語学習パイプラインの実行
 
-P0/P1/S0 スクリプトを実際に完走させるためのリファレンス。
+P0/P1/S0/S1 スクリプトを実際に完走させるためのリファレンス。
 実測値は [`docs/japanese-training/RESULTS.md`](../../../docs/japanese-training/RESULTS.md)、
 フェーズ定義は `docs/japanese-training/08-execution-plan.md`。
 
@@ -75,6 +75,8 @@ data/raw/moe/info.csv         # 同上の話者一覧
 | s0 | `diagnose_flow_loss.py` | **要** | 同上 + 比較したいcheckpoint | `artifacts/s0-diagnose/<ts>/` |
 | s0 | `check_reference_following.py` | **要** | latent cache, checkpoint | `artifacts/s0-refcheck/<ts>/`（音声つき） |
 | — | `benchmark_training_memory.py` | **要** | `model/CuteTTS` | VRAM/throughput の実測 |
+| s1 | `measure_asr_floor.py` | **要**（`--build` は不要） | gol metadata + tars | `artifacts/asr-floor/<ts>/` |
+| s1 | `s1_preprocess.sh` | **要** | HF（gol）+ `HF_TOKEN` | latent cache を HF へ upload |
 
 **依存順序**: `prepare_japanese_manifest` → `cache_audio_latents` → `build_voice_clusters`
 → `train_continual` → `diagnose_flow_loss` / `evaluate_japanese_cer` / `check_reference_following`。
@@ -105,7 +107,9 @@ jq '.summary' artifacts/p0/*/metrics.json   # gate_passed は true/false。error
 .venv/Scripts/python.exe scripts/cache_audio_latents.py --limit 300   # パイロット
 .venv/Scripts/python.exe scripts/cache_audio_latents.py               # 本実行
 
-# voiceクラスタ（CPU）。既定0.70ではなく 0.92
+# voiceクラスタ（CPU）。既定0.70ではなく 0.92。linkage既定は complete
+# voice_cluster_id（完全連結）と split_group_id（単連結）の両方を作り、
+# split は split_group_id 単位で切り直す。漏れがあれば異常終了する
 .venv/Scripts/python.exe scripts/build_voice_clusters.py --threshold 0.92
 
 # --- S0 ---
@@ -143,6 +147,34 @@ gol全体（10,654時間）をP1eに通すと **約239 GPU時間 / latent cache 
 これはローカルで回すには重すぎるので vast.ai を検討する。
 
 パイロットと本実行は同じcacheへ書く。**衝突ではなく再開**として扱われる（既存IDはスキップ）。
+
+## S1の前処理（vast.ai上で完結させる）
+
+**215 GBをローカルへ落とさない。** インスタンス上でgolを直接取得し、
+永続化するのは latent cache 約1.8 GB だけ。
+
+```bash
+# disk 300GB以上のインスタンスを立てる
+vastai create instance <offer_id> --image pytorch/pytorch:2.5.1-cuda12.1-cudnn9-devel   --disk 320 --ssh --direct --label cutetts-s1-preprocess
+
+# HFトークンを渡す（gated dataset の読み取りと成果物の書き込みに要る）
+ssh ... 'mkdir -p ~/.cache/huggingface && cat > ~/.cache/huggingface/token'  # ローカルから流し込む
+
+# DL → manifest → latent cache → cluster → upload を1本で
+ssh ... "cd /workspace/CuteTTS && export HF_TOKEN=\$(cat ~/.cache/huggingface/token) && \n  setsid nohup bash scripts/s1_preprocess.sh > s1.log 2>&1 < /dev/null &"
+```
+
+所要 約9時間・**$2.8**（gol 5 game / 326時間 / 215 GB）。
+
+**成果物**: [tts-dataset/cutetts-ja-latents](https://huggingface.co/datasets/tts-dataset/cutetts-ja-latents)
+（public / **gated: manual**）。以降のインスタンスは復元するだけでよい。
+
+```bash
+hf download tts-dataset/cutetts-ja-latents --repo-type dataset --local-dir data/restored
+```
+
+**音声そのものは絶対に上げない。** latentは公開VAEで復元できる（往復CER中央値0.00%）
+ので、音声と同じ扱いにする。上げてよいのは latent / speaker embedding / manifest だけ。
 
 ## vast.ai で回す
 
@@ -184,6 +216,10 @@ yes | vastai destroy instance <id>
 | 学習は進むのにモデルが悪化する | `PairSampler.sample()` を step ごとに呼んでいる。**呼ぶたびにRNGを作り直す仕様**なので毎回同じペアが返る。`iter_pairs()` の stream を1本持って `islice` で引く。`tests/training/test_pair_stream.py` が検知する |
 | stop loss が 0.0000 になる | 上と同じ原因の可能性が高い。少数sampleの丸暗記 |
 | 評価CERが特定subsetだけ84%前後に張り付く | 評価文に語彙的内容が無い（`ふあぁぁぁ…` のような感情表現）。`build_eval_set.py` の `has_lexical_content()` が除外する。**CERを見て文を選び直さないこと** |
+| CERを0%基準で読んでしまう | **人間の実音声でも同じ経路で10.4%出る**（`measure_asr_floor.py`）。TTS由来の誤りは実測値からこの床を引いて考える |
+| golのgameが丸ごとmanifestに出ない | 大きいgameは `<game>_part1.tar` / `_part2.tar` に分割されている。tarのファイル名をそのまま game_id に使うと落ちる（S1では170時間・52%が消えていた） |
+| reference追随が学習で悪化する | voiceクラスタに別の声が混ざっている。単連結は連鎖で巨大クラスタを作る。`--linkage complete`（既定）を使い、`build_voice_clusters.py` が出す「クラスタ内の最小cos」が閾値以上かを見る（R-014） |
+| zero-shotがzero-shotでない | splitを `voice_cluster_id`（細かい）で切っている。**`split_group_id`（単連結・粗い）で切る**。`build_voice_clusters.py` は漏れがあれば異常終了する |
 | `ms/step` が異常な値 | 表示のみのバグ。save のたびに `state.step` が進むため分母が壊れる（修正済み） |
 
 ## 環境の罠
