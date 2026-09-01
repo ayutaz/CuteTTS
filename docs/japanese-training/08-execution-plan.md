@@ -760,6 +760,25 @@ stop headが学習できず無限生成または早期停止、NaN/overflowの�
 
 日本語品質とzero-shot voice cloningの成立を確認し、S2へ拡大する構成を1つに絞る。
 
+### 状態: 前処理完了（2026-09-01）。学習は未着手
+
+データは [tts-dataset/cutetts-ja-latents](https://huggingface.co/datasets/tts-dataset/cutetts-ja-latents)
+（gated: manual）に置いた。以降のインスタンスは約2 GBの取得だけで学習できる。
+
+| split | 発話 | 時間 | voice cluster |
+|---|---:|---:|---:|
+| train | 159,964 | **265.7h** | 894 |
+| dev-zero-shot | 5,410 | 8.1h | 52 |
+| test-zero-shot | 22,847 | 31.0h | 67 |
+| dev-seen | 4,182 | 6.9h | 254 |
+| test-seen | 4,203 | 6.9h | 277 |
+
+gol 5ゲーム（326時間・1,197話者ID・215 GB）を vast.ai 上で前処理した。
+215 GBはローカルへ落としていない。所要 約9時間・**$2.8**。
+
+前処理の過程で2つの静かな欠陥を見つけて修正した（[R-014](07-risks-and-decisions.md)、
+分割tarの取りこぼし）。詳細は[RESULTS.md](RESULTS.md)。
+
 ### ゴール
 
 - [ ] Japanese CER、speaker similarity、自然性、アクセント、long-form安定性、
@@ -769,6 +788,10 @@ stop headが学習できず無限生成または早期停止、NaN/overflowの�
 - [ ] 比較実験（Patch Encoder train/freeze、100%日本語 vs replay混合、raw/normalized text）の
       結果から、S2で使うconfigが1つに決まっている
 - [ ] streaming生成がoffline同等の品質を保っている
+
+**out_of_domain（数字・固有名詞）はS1のゴールに含めない（D-026）。**
+golのcorpusで数字を含む文は1.3%しかなく、データ量では解決しないため。
+S1ではD-008の「読み誤りの内訳を集計する」だけを行い、対処はS2で決める。
 
 ### 判断ゲート
 

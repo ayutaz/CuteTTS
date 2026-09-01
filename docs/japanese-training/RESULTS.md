@@ -391,6 +391,64 @@ text正規化で読みを与えるか、数字を含む文を別途補強する�
 
 集計結果は `data/gol_game_stats.json`（596ゲーム分の時間・話者数・text性質）。
 
+## S1 前処理（2026-09-01、vast.ai RTX 3090）
+
+gol 5ゲームを **vast.ai上で完結** させ、latent cache だけを永続化した。
+215 GBはローカルへ落としていない。所要 約9時間 / **$2.8**。
+
+成果物: [tts-dataset/cutetts-ja-latents](https://huggingface.co/datasets/tts-dataset/cutetts-ja-latents)（public / gated: manual）
+
+| 中身 | サイズ |
+|---|---:|
+| latents | 1.8 GB |
+| speaker embeddings | 109 MB |
+| manifests | 357 MB |
+
+### データ
+
+| split | 発話 | 時間 | voice cluster |
+|---|---:|---:|---:|
+| train | 159,964 | **265.7h** | 894 |
+| dev-zero-shot | 5,410 | 8.1h | 52 |
+| test-zero-shot | 22,847 | 31.0h | 67 |
+| dev-seen | 4,182 | 6.9h | 254 |
+| test-seen | 4,203 | 6.9h | 277 |
+
+S0比で train **37倍**、zero-shot話者 **3 → 119クラスタ**。R-013は解消した。
+
+### 見つけた2つの静かな欠陥
+
+**1. 分割tarでゲームが丸ごと落ちていた（実行前に発見）**
+
+tarのファイル名をそのまま game_id として使っていた。golの大きいゲームは
+`_part1.tar` / `_part2.tar` に分割されており、選定5ゲーム中2ゲーム
+（**170時間・全体の52%**）がエラーも出さずにmanifestから消えていた。
+「tar 602本 vs metadata上のgame 596」という既知の差の正体でもあった。
+
+**2. クラスタの粒度が用途に対して逆向きだった（[R-014](07-risks-and-decisions.md)）**
+
+単連結クラスタリングの連鎖で 45話者・86.1時間（trainの30.5%）が
+1クラスタになり、**学習ペアの26.9%でreferenceと違う声をtargetにしていた**。
+
+| linkage @0.92 | クラスタ数 | 最大話者 | ペア不一致 | 境界をまたぐ同一声 |
+|---|---:|---:|---:|---:|
+| single | 974 | **42** | **26.9%** | 0話者 |
+| average | 1,006 | 4 | 13.1% | — |
+| complete | 1,021 | 2 | 8.3% | **15話者** |
+
+完全連結だけにすると逆に、同じ声がtrainとzero-shotへ分かれた。
+**用途ごとに粒度が逆向きに必要**なので、単位を2つに分けた（D-027）。
+
+| 単位 | linkage | 用途 |
+|---|---|---|
+| `voice_cluster_id` | 完全連結（細かい） | PairSamplerのreference/target選択 |
+| `split_group_id` | 単連結（粗い） | splitの割り当て |
+
+修正後の検証: voice_clusterのsplitまたぎ **0件** /
+境界をまたぐ最大cos **0.9198**（< 0.92） / クラスタ内の最小cos **0.9204**（≥ 0.92）。
+
+**閾値0.92そのものは妥当だった。** 壊れていたのは併合の仕方であって閾値ではない。
+
 ## artifact の所在
 
 ```text
