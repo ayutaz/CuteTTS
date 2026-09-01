@@ -175,6 +175,9 @@ def build_parser() -> argparse.ArgumentParser:
                              "長い学習では必ず有効にすること（D-025）")
     parser.add_argument("--eval-batches", type=int, default=16,
                         help="dev評価に使う固定バッチ数")
+    parser.add_argument("--export-every-save", action="store_true",
+                        help="--save-every のたびに推論用exportも残す。"
+                             "長い学習でCERの推移を測るために使う（R-015）")
     parser.add_argument("--out", default="checkpoints/s0")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--artifact-root", default="artifacts")
@@ -341,6 +344,11 @@ def main() -> None:
             state.step = step + 1
             save_training_state(out_dir, model=model, optimizer=optimizer,
                                 state=state, generator=generator)
+            if args.export_every_save:
+                # 推論用exportも残す。学習中にCERを測るには推論可能な形が要る。
+                # flow/stop loss では生成の崩壊を検知できない（R-015）。
+                export_for_inference(out_dir / f"inference-{step + 1}", model=model,
+                                     source_model_dir=Path(args.model_dir))
 
     state.step = args.steps
     save_training_state(out_dir, model=model, optimizer=optimizer, state=state,
