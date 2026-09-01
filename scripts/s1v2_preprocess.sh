@@ -49,20 +49,38 @@ step "2/6 音声 tar（約279 GB / 8 game）"
 # 大きい game は _partN に分割されている。実ファイル名をrepoから解決する
 mkdir -p data/raw/gol/tars
 python - <<'PY'
-import json, os
+import json, os, time
 from huggingface_hub import HfApi, hf_hub_download
+
+# **サイズを検証して再試行する。** hf_hub_download はネットワーク切断時に
+# 例外を投げずに途中で終わることがある（実測: 43.2 GB のtarが 2.97 GB で
+# 静かに中断し、set -e でも捕捉できずパイプライン全体が停止した）。
 api = HfApi()
-files = [f for f in api.list_repo_files("midralab/gol-dataset", repo_type="dataset")
-         if f.endswith(".tar")]
+info = {s.rfilename: s.size for s in
+        api.repo_info("midralab/gol-dataset", repo_type="dataset",
+                      files_metadata=True).siblings}
 want = json.load(open("data/s1v2_games.json"))
-targets = [f for f in files if any(f.startswith(g) for g in want)]
+targets = sorted(f for f in info
+                 if f.endswith(".tar") and any(f.startswith(g) for g in want))
 print(f"  実ファイル {len(targets)} 本（分割込み）", flush=True)
+
 for index, name in enumerate(targets, 1):
-    if os.path.exists(f"data/raw/gol/tars/{name}"):
-        print(f"  skip {name}", flush=True); continue
-    print(f"  [{index}/{len(targets)}] {name}", flush=True)
-    hf_hub_download("midralab/gol-dataset", name, repo_type="dataset",
-                    local_dir="data/raw/gol/tars")
+    path = f"data/raw/gol/tars/{name}"
+    expected = info[name]
+    for attempt in range(1, 6):
+        if os.path.exists(path) and os.path.getsize(path) == expected:
+            break
+        actual = os.path.getsize(path) if os.path.exists(path) else 0
+        print(f"  [{index}/{len(targets)}] {name}  "
+              f"{actual/1e9:.1f}/{expected/1e9:.1f} GB (試行 {attempt})", flush=True)
+        try:
+            hf_hub_download("midralab/gol-dataset", name, repo_type="dataset",
+                            local_dir="data/raw/gol/tars")
+        except Exception as error:
+            print(f"    失敗: {type(error).__name__}: {error}", flush=True)
+            time.sleep(10)
+    else:
+        raise SystemExit(f"{name} を5回試しても取得できない")
     os.system("df -h . | tail -1")
 PY
 du -sh data/raw/gol/tars
@@ -79,6 +97,14 @@ wc -l data/manifests/all.jsonl
 step "5/6 latent cache"
 python -u scripts/cache_audio_latents.py --manifest data/manifests/all.jsonl
 du -sh data/cache/latents data/cache/speaker
+
+# **latent cache を先にHFへ上げる。** ホスト障害でインスタンスが消えると
+# 289 GB の再取得と 11 GPU時間が無駄になる（実測: vast.aiホストの
+# input/output error で offline になり、全データを失った）。
+# cluster付与前でも latent と speaker embedding は再利用できる。
+step "5.5/6 latent cache を先に退避"
+hf upload "$UPLOAD_REPO" data/cache/latents latents-v2 --repo-type dataset   --commit-message "S1 v2: latent cache（cluster付与前）"
+hf upload "$UPLOAD_REPO" data/cache/speaker speaker-v2 --repo-type dataset   --commit-message "S1 v2: speaker embeddings"
 
 step "6/6 voice cluster + 密度の確認"
 python -u scripts/build_voice_clusters.py --threshold 0.92
