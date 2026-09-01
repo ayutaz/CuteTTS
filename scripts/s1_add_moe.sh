@@ -61,14 +61,30 @@ print(f"  完了 {len(names)} 話者")
 PY
 du -sh data/raw/moe
 
-step "2/5 manifest（gol tar + moe zip の両方から）"
-# gol の tar は既にある前提。無ければ s1_preprocess.sh を先に回す
-python -u scripts/prepare_japanese_manifest.py --skip-full-accounting
-wc -l data/manifests/all.jsonl
+step "2/5 moe だけの manifest"
+# **golのtar（215 GB）は再取得しない。** gol_records は tar が無ければ
+# 空を返すので、ここでは moe だけが manifest に入る。
+# gol の latent は既に HF から取得済みで、後で結合する。
+python -u scripts/prepare_japanese_manifest.py --skip-full-accounting \n  --gol-tars /nonexistent --out-dir data/manifests_moe
+wc -l data/manifests_moe/all.jsonl
 
-step "3/5 latent cache（moe分のみ追加。既存はスキップされる）"
-python -u scripts/cache_audio_latents.py --manifest data/manifests/all.jsonl
+step "3/5 moe の latent cache（既存のgol分はそのまま残る）"
+python -u scripts/cache_audio_latents.py --manifest data/manifests_moe/all.jsonl
 du -sh data/cache/latents data/cache/speaker
+
+step "3.5/5 gol と moe の manifest を結合"
+python - <<'PY'
+import json
+from pathlib import Path
+gol = [json.loads(l) for l in open("data/manifests/all_clean.jsonl", encoding="utf-8")]
+moe = [json.loads(l) for l in open("data/manifests_moe/all.jsonl", encoding="utf-8")]
+merged = gol + moe
+out = Path("data/manifests/all.jsonl")
+with out.open("w", encoding="utf-8") as handle:
+    for record in merged:
+        print(json.dumps(record, ensure_ascii=False), file=handle)
+print(f"  gol {len(gol):,} + moe {len(moe):,} = {len(merged):,}")
+PY
 
 step "4/5 voice cluster"
 python -u scripts/build_voice_clusters.py --threshold 0.92
