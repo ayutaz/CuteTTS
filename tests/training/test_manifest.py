@@ -43,7 +43,9 @@ def make_utterance(**overrides) -> Utterance:
         "audio_ref": "data/raw/gol/audio/game0001.tar::game0001/0000001.wav",
         "text_raw": "今日はいい天気ですね。",
         "speaker_id": "0123456789ABCDEF0123456789ABCDEF",
-        "duration": 5.18,
+        # 11文字 / 2.2秒 = 0.20 秒/文字。自然な日本語の範囲に収めて
+        # text_audio_mismatch を誘発しないようにする（既定閾値 0.40）。
+        "duration": 2.2,
         "sample_rate": 48000,
     }
     base.update(overrides)
@@ -219,6 +221,7 @@ def test_validate_returns_empty_list_for_clean_records() -> None:
             utterance_id="moe:2f8a91cc:007",
             dataset_id="moe",
             speaker_id="2f8a91cc",
+            text_raw="おはようございます、今日もよろしくお願いします。",
             duration=5.66,
             sample_rate=44100,
         ),
@@ -249,7 +252,9 @@ def test_validate_detects_too_short() -> None:
 
 
 def test_validate_detects_too_long() -> None:
-    issues = validate([make_utterance(duration=45.0)], max_duration=30.0)
+    # 45秒に見合う長さのtextにして、too_long だけが出ることを見る
+    issues = validate([make_utterance(duration=45.0, text_raw="あ" * 300)],
+                      max_duration=30.0)
 
     assert codes(issues) == {"too_long"}
 
@@ -295,9 +300,10 @@ def test_validate_uses_text_rules_when_available(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "cutetts.training.text_rules", module)
     monkeypatch.setattr("cutetts.training.text_rules", module, raising=False)
 
-    assert codes(validate([make_utterance(text_raw="…………")])) == {"punctuation_only"}
-    assert codes(validate([make_utterance(text_raw="<rかな>仮名</r>")])) == {"markup"}
-    assert codes(validate([make_utterance(text_raw="%bdさん、おはよう")])) == {"name_placeholder"}
+    # duration は text の長さに見合わせる（text_audio_mismatch を誘発しない）
+    assert codes(validate([make_utterance(text_raw="…………", duration=1.0)])) == {"punctuation_only"}
+    assert codes(validate([make_utterance(text_raw="<rかな>仮名</r>", duration=1.5)])) == {"markup"}
+    assert codes(validate([make_utterance(text_raw="%bdさん、おはよう", duration=1.8)])) == {"name_placeholder"}
 
 
 def test_validate_skips_text_rule_codes_when_module_missing(monkeypatch) -> None:
@@ -313,7 +319,7 @@ def test_validate_skips_text_rule_codes_when_module_missing(monkeypatch) -> None
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
 
-    assert validate([make_utterance(text_raw="…………")]) == []
+    assert validate([make_utterance(text_raw="…………", duration=1.0)]) == []
 
 
 def test_all_reported_codes_are_declared() -> None:

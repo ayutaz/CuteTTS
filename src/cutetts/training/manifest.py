@@ -41,6 +41,7 @@ from cutetts.training.artifacts import file_checksum
 __all__ = [
     "ARCHIVE_SEPARATOR",
     "DATASET_IDS",
+    "DEFAULT_MAX_SECONDS_PER_CHAR",
     "SplitCounts",
     "UNASSIGNED_SPLIT",
     "Utterance",
@@ -59,6 +60,27 @@ DATASET_IDS: tuple[str, ...] = ("gol", "moe")
 
 #: 書庫内memberを指すときの区切り。``<archive path>::<member>``。
 ARCHIVE_SEPARATOR = "::"
+
+DEFAULT_MAX_SECONDS_PER_CHAR = 0.40
+"""``duration / 文字数`` の上限。これを超える発話は text と音声が対応していない。
+
+日本語の自然な発話は 0.10〜0.20 秒/文字。S1で選定した5 game のうち1 game が
+**41.6% でこの値を超え**（median 0.371）、text が途中で切れた record が
+大量に含まれていた（例: 19.4秒の音声に ``瑞羽の『瑞`` の5文字）。
+
+このデータで学習すると **「短い text に長い音を返す」** ことを覚え、
+推論で停止しなくなる。実測では生成の15%が上限（64秒）に張り付き、
+その区間は 0.05〜0.5 文字/秒（正常は5.74）と、text に対応しない音だった。
+in_domain CER は 35.8%（未学習）→ 51.6% へ悪化した。
+
+閾値0.40の根拠: CER 28.4% を達成した S0 の学習データではこの値を超える
+record が **1.4%** しか無く、S1（汚染あり）は 12.5% だった。0.40 で切ると
+S1 も 1.5% 相当になり、S0 と同じ品質水準に揃う。
+
+**flow loss では検知できない。** 壊れたデータも忠実に再現できるように
+なるほど flow loss は下がるため、S1 では loss が改善し続ける裏で
+CER が悪化した（R-015）。
+"""
 
 #: :func:`summarize` で ``split`` 未設定のrecordをまとめるkey。
 UNASSIGNED_SPLIT = "unassigned"
@@ -220,6 +242,7 @@ VALIDATION_CODES: tuple[str, ...] = (
     "name_placeholder",
     "too_short",
     "too_long",
+    "text_audio_mismatch",
     "duplicate_id",
     "bad_duration",
     "bad_sample_rate",
@@ -254,6 +277,8 @@ def validate(
     *,
     min_duration: float = 1.0,
     max_duration: float = 30.0,
+    max_seconds_per_char: float = DEFAULT_MAX_SECONDS_PER_CHAR,
+    min_chars_for_ratio: int = 3,
     generic_speaker_ids: frozenset[str] = frozenset(),
 ) -> list[ValidationIssue]:
     """全recordを検査してissueを返す。
@@ -262,6 +287,10 @@ def validate(
         records: 検査対象。iteratorでよい（ID重複検出のためutterance_idのみ保持する）。
         min_duration: これ未満は ``too_short``（golでは0〜1秒が4.39%）。
         max_duration: これ超は ``too_long``。
+        max_seconds_per_char: ``duration / 文字数`` がこれを超えると ``text_audio_mismatch``。
+            :data:`DEFAULT_MAX_SECONDS_PER_CHAR` を参照。
+        min_chars_for_ratio: 比の計算に必要な最小文字数。短すぎる text は比が
+            不安定になるため検査しない。
         generic_speaker_ids: 総称ラベル話者のID集合。1 IDに複数の声が混在するため
             ``generic_speaker`` として除外候補にする。
 
@@ -324,6 +353,15 @@ def validate(
                 issues.append(ValidationIssue("too_short", uid, f"duration={duration:.3f}s < {min_duration}s"))
             if duration > max_duration:
                 issues.append(ValidationIssue("too_long", uid, f"duration={duration:.3f}s > {max_duration}s"))
+
+            stripped = len((record.text_raw or "").strip())
+            if stripped >= min_chars_for_ratio:
+                ratio = duration / stripped
+                if ratio > max_seconds_per_char:
+                    issues.append(ValidationIssue(
+                        "text_audio_mismatch", uid,
+                        f"duration/char={ratio:.3f}s > {max_seconds_per_char}s "
+                        f"({duration:.2f}s for {stripped} chars)"))
 
         sample_rate = record.sample_rate
         if not isinstance(sample_rate, int) or isinstance(sample_rate, bool) or sample_rate <= 0:
