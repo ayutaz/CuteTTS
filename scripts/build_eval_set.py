@@ -95,7 +95,7 @@ def has_lexical_content(text: str) -> bool:
     stripped = re.sub(r"[\s、。「」『』・…‥！？!?,.\-―ー~〜\"'()（）]", "", text)
     if len(stripped) < 8:
         return False
-    if re.search(r"(.){3,}", stripped):
+    if re.search(r"(.)\1{3,}", stripped):
         return False
     if len(set(stripped)) / len(stripped) < 0.45:
         return False
