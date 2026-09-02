@@ -128,11 +128,29 @@ def load_training_state(
     return TrainingState(**payload["state"])
 
 
+def promote_to_float32(model: CuteTTSModel) -> dict[str, torch.dtype]:
+    """学習の前にパラメータを fp32 へ上げ、元の dtype を返す。
+
+    公開checkpointは `qwen_backbone` と `locenc` が bf16 で、`AdamW` がそれを
+    直接更新すると lr=2e-5 の更新量が bf16 の丸め幅（相対 2^-8）を下回る。
+    round-to-nearest-even は毎stepその更新を捨てるので、同じ向きに積み上がらず
+    **backboneの91% / locencの84%が1stepも動かない**（R-020）。
+    fp32 の `head` だけが学習されていた。
+
+    学習中だけ fp32 に上げ、`export_for_inference` に返り値を渡して
+    元の dtype へ戻す。推論側の `config.json` は bf16 のままなので整合する。
+    """
+    original = {k: v.dtype for k, v in model.state_dict().items()}
+    model.float()
+    return original
+
+
 def export_for_inference(
     directory: str | Path,
     *,
     model: CuteTTSModel,
     source_model_dir: str | Path,
+    dtypes: dict[str, torch.dtype] | None = None,
 ) -> Path:
     """推論の `CuteTTS.from_pretrained` が読めるディレクトリを書き出す。
 
@@ -140,6 +158,9 @@ def export_for_inference(
     は ``source_model_dir`` からコピーし、`weights/tts/model.safetensors` だけを
     学習後の重みで置き換える。VAE と Speaker Encoder は freeze しているため
     そのままで整合する（D-003 / D-004）。
+
+    ``dtypes`` に `promote_to_float32` の返り値を渡すと、保存時に元の dtype へ
+    戻す。渡さなければ現在の dtype のまま書き出す。
     """
     from safetensors.torch import save_file
 
@@ -160,6 +181,13 @@ def export_for_inference(
 
     tts_dir = directory / "weights" / "tts"
     tts_dir.mkdir(parents=True, exist_ok=True)
-    tensors = {k: v.detach().cpu().contiguous() for k, v in model.state_dict().items()}
+    tensors = {}
+    for key, value in model.state_dict().items():
+        tensor = value.detach().cpu().contiguous()
+        if dtypes is not None and tensor.is_floating_point():
+            target = dtypes.get(key)
+            if target is not None:
+                tensor = tensor.to(target)
+        tensors[key] = tensor
     save_file(tensors, str(tts_dir / "model.safetensors"))
     return directory

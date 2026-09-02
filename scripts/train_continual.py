@@ -46,6 +46,7 @@ from cutetts.training import artifacts
 from cutetts.training.checkpointing import (
     TrainingState,
     export_for_inference,
+    promote_to_float32,
     load_training_state,
     save_training_state,
 )
@@ -75,6 +76,43 @@ def load_model(model_dir: Path, device: torch.device, dtype: str) -> CuteTTSMode
     if missing or unexpected:
         raise RuntimeError(f"weights did not load strictly: {missing} / {unexpected}")
     return model.to(device).train()
+
+
+class ParameterDrift:
+    """「重みが実際に動いたか」を追跡する。
+
+    R-020（bf16の丸めでbackboneが凍結する）を二度と見逃さないための計器。
+    lossが下がっていても、それがheadだけの適応なら日本語は学習できていない。
+    全要素を保持すると重いので、moduleごとに固定indexの標本を持つ。
+    """
+
+    SAMPLE = 4096
+
+    def __init__(self, model: CuteTTSModel, *, seed: int, modules=("qwen_backbone", "locenc", "head")):
+        self.modules = modules
+        self.index: dict[str, torch.Tensor] = {}
+        self.before: dict[str, torch.Tensor] = {}
+        generator = torch.Generator().manual_seed(seed)
+        for name, param in model.named_parameters():
+            if not param.requires_grad or param.numel() < self.SAMPLE:
+                continue
+            picked = torch.randint(0, param.numel(), (self.SAMPLE,), generator=generator)
+            self.index[name] = picked
+            self.before[name] = param.detach().flatten()[picked].float().cpu().clone()
+
+    def moved(self, model: CuteTTSModel) -> dict[str, float]:
+        """moduleごとに「値が変わった標本の割合」を返す。"""
+        hit: dict[str, list[int]] = {m: [0, 0] for m in self.modules}
+        for name, param in model.named_parameters():
+            if name not in self.index:
+                continue
+            module = next((m for m in self.modules if name.startswith(m)), None)
+            if module is None:
+                continue
+            now = param.detach().flatten()[self.index[name]].float().cpu()
+            hit[module][0] += int((now != self.before[name]).sum())
+            hit[module][1] += now.numel()
+        return {m: (c / t if t else 0.0) for m, (c, t) in hit.items()}
 
 
 def cosine_lr(step: int, *, peak: float, warmup: int, total: int, floor_ratio: float = 0.1) -> float:
@@ -153,6 +191,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--speaker-cache", default="data/cache/speaker")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--dtype", default="bfloat16")
+    parser.add_argument("--param-dtype", default="float32",
+                        choices=("float32", "checkpoint"),
+                        help="学習中のパラメータdtype。checkpoint は bf16 のまま更新する"
+                             "（R-020を再現するためだけの選択肢）")
     parser.add_argument("--steps", type=int, default=2000)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--lr", type=float, default=1e-5,
@@ -199,9 +241,16 @@ def main() -> None:
     print(f"train records: {len(records):,}")
 
     model = load_model(Path(args.model_dir), device, args.dtype)
+    # **公開checkpointは backbone / locenc が bf16。**AdamW がそれを直接更新すると
+    # lr=2e-5 の更新量が bf16 の丸め幅を下回り、backboneの91% / locencの84%が
+    # 1stepも動かない（R-020）。fp32 に上げてから学習し、export で元のdtypeへ戻す。
+    export_dtypes = promote_to_float32(model) if args.param_dtype == "float32" else None
     freeze_all_but(model, TRAINABLE_MODULES)
     trainable = [p for p in model.parameters() if p.requires_grad]
     print(f"trainable parameters: {sum(p.numel() for p in trainable)/1e6:.1f}M")
+    print(f"param dtype: {args.param_dtype}"
+          + ("" if export_dtypes else "  ← bf16のまま（R-020の再現用）"))
+    drift = ParameterDrift(model, seed=args.seed)
 
     # prompt は推論と同じ並びを作る必要があるため、実 processor を使う
     from cutetts.modeling.processor import CuteTTSProcessor
@@ -348,24 +397,35 @@ def main() -> None:
                 # 推論用exportも残す。学習中にCERを測るには推論可能な形が要る。
                 # flow/stop loss では生成の崩壊を検知できない（R-015）。
                 export_for_inference(out_dir / f"inference-{step + 1}", model=model,
-                                     source_model_dir=Path(args.model_dir))
+                                     source_model_dir=Path(args.model_dir),
+                                     dtypes=export_dtypes)
 
     state.step = args.steps
     save_training_state(out_dir, model=model, optimizer=optimizer, state=state,
                         generator=generator)
     export_for_inference(out_dir / "inference", model=model,
-                         source_model_dir=Path(args.model_dir))
+                         source_model_dir=Path(args.model_dir),
+                         dtypes=export_dtypes)
 
     artifacts.write_run_metadata(
         run_dir, phase="s0-train",
         command=[Path(sys.argv[0]).name] + sys.argv[1:], seed=args.seed,
         inputs={"manifest": args.manifest, "model_dir": args.model_dir},
     )
+    # **重みが実際に動いたかを必ず記録する。** loss が下がっても、それが head だけの
+    # 適応なら日本語は学習できていない（R-020）。
+    moved = drift.moved(model)
+    print("\n重みが動いた標本の割合:")
+    for module, ratio in moved.items():
+        print(f"  {module:16s} {ratio*100:6.2f}%"
+              + ("" if ratio > 0.5 else "  ← ほぼ動いていない"))
+
     artifacts.write_metrics(run_dir, {
         "phase": "s0-train", "settings": vars(args),
         "train_records": len(usable), "eligible_groups": len(groups),
         "history": history,
         "evaluations": evaluations,
+        "parameter_moved_ratio": moved,
         "total_seconds": time.perf_counter() - started,
         "checkpoint": str(out_dir), "inference_export": str(out_dir / "inference"),
     })
