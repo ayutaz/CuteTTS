@@ -133,11 +133,28 @@ LMのtoken rateは `12.5 / 2 = 6.25 patch/s`。`--max-decode-length 750` は約1
 
 文書は情報を **確認済み / 決定済み / 提案 / 未確定** の4状態で区別する規約がある。
 「実装した」と「日本語学習が成功した」を混同しないこと。
-07章の意思決定表（D-001〜D-027）は項目を削除せず、状態と理由を追記して更新する。
+07章の意思決定表（D-001〜D-031）は項目を削除せず、状態と理由を追記して更新する。
 
-### 進捗（2026-09-01）
+### 進捗（2026-09-02）
 
-**P0 / P1 / P2 / S0 完了。S1は学習19回を試行したが目標未達。**
+**P0 / P1 / P2 / S0 完了。S1の失敗原因が確定し、修正して最良値を更新した。**
+
+**S1が失敗していた原因は データではなく学習の実装だった（R-020）。**
+公開checkpointの `qwen_backbone` / `locenc` は bf16 で、`AdamW` がそれを直接
+更新すると lr=2e-5 の更新量が bf16 の丸め幅を下回り、**backboneの91%が
+1stepも動いていなかった**。学習されていたのは fp32 の DiT head だけ。
+19回の試行はすべてこの条件下の観測なので、S1の結論群は再検証を要する。
+
+修正後（同一データ・同一step・同一seed、dtypeのみ変更）:
+
+| 実行 | in_domain mean / median | 打切 |
+|---|---:|---:|
+| base | 35.78 / 30.25 | 0/30 |
+| S0（7.15h） | 28.36 / 25.53 | 0/30 |
+| S1v2 bf16（325.9h） | 30.69 / 27.52 | 1/30 |
+| **S1v2 fp32（325.9h）** | **24.36 / 23.23** | **0/30** |
+
+bf16版との差 -6.33pt（95%CI [-11.13, -1.61]、有意）。base比 -11.42pt。
 
 | フェーズ | 状態 | 主要な結論 |
 |---|---|---|
@@ -149,7 +166,7 @@ LMのtoken rateは `12.5 / 2 = 6.25 patch/s`。`--max-decode-length 750` は約1
 | P1e | Pass A完了 | 44.5× realtime、外挿 65.3 GB / **239 GPU時間**。Pass BはS2直前 |
 | P2 | 完了 | ゴール7件達成。変異テスト9/9検出。すべてCPUで検証 |
 | S0 | 完了 | **in_domain CER 35.8% → 28.4%**。reference追随 12/12。7.15hで通過 |
-| S1 | **目標未達** | 19回試行。最良 **30.8%**（密クラスタ17.5h）。S0の28.4%に届かず |
+| S1 | **原因確定・修正済** | bf16でbackboneが凍結していた（R-020）。修正後 **24.36%** が最良 |
 
 ### 実装済み
 
@@ -158,9 +175,11 @@ src/cutetts/training/   P1: artifacts, manifest, text_rules, pairing,
                             latents, speaker_cache, voice_clusters
                         P2: objectives, collator, dataset, forward,
                             packing, checkpointing, prompt
+                        S1: evalstats（対応のある検定・打ち切り勘定）
 scripts/                reproduce_baseline, analyze_japanese_tokenizer,
                         evaluate_japanese_vae, prepare_japanese_manifest,
-                        cache_audio_latents, build_voice_clusters
+                        cache_audio_latents, build_voice_clusters,
+                        summarize_eval_runs（CER横断集計・信頼区間）
                         S0: train_continual, diagnose_flow_loss,
                             check_reference_following, build_eval_set,
                             evaluate_japanese_cer
@@ -206,6 +225,24 @@ S1のデータは [tts-dataset/cutetts-ja-latents](https://huggingface.co/datase
 - **CERには約10%の床がある**。人間の実音声を同じ経路で測ると 10.4%。
   S0の28.4%を「0%が理想」として読まない。TTS由来は約18pt。
 - ~~zero-shot split の話者不足（R-013）~~ → S1前処理で解消（119 cluster）。
+
+### 測定と学習で二度と繰り返さないこと（2026-09-02 確定）
+
+- **bf16パラメータを optimizer で直接更新しない（R-020）。** lr が小さいと
+  更新が丸め幅を下回り、round-to-nearest-even が毎step捨てる。
+  `promote_to_float32` で fp32 に上げ、`export_for_inference(dtypes=)` で戻す。
+  **`ParameterDrift` の「重みが動いた割合」を毎runのmetricsで必ず確認する。**
+  100%から大きく外れていたら、そのrunの比較は無意味。
+- **n=30 の評価setで 2〜3pt の差を語らない。** 検出できる最小差は **6.9pt**。
+  `scripts/summarize_eval_runs.py --compare A B` で信頼区間を必ず出す。
+  2ptを判定するには約357文が要る。
+- **打ち切り生成をCERに混ぜない（R-021）。** `max_decode_length`（64.0秒）
+  張り付きは停止の失敗であって発音誤りではない。`summarize_eval_runs.py` が
+  打ち切り率を別勘定で出す。停止健全性はCERとは独立のゲートとして扱う。
+- **評価setは結果を見てから変えない。** v1→v2の差し替えだけで基準線が
+  5.2pt動いた（改善幅の主張自体は共通27文で再現するが、絶対ゲート値は事後編集の下流）。
+- **実行の対応付けはindexではなくテキストで行う。** 評価setが差し替わると
+  indexがずれ、別の文どうしを比較する（v1→v2で実際に起きた）。
 
 ### S1で判明した落とし穴（再発させない）
 
