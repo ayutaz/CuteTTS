@@ -792,6 +792,50 @@ S1ゴールの1件。**R-020 の修正までは測る意味がなかった**（b
 replay混合・言語条件づけ・中国語を諦める、のいずれか。
 **S1では判断しない**（用途に中国語が要るかという製品判断）。
 
+### streaming品質 / TTFA / RTF（S1ゴール、2026-09-02）
+
+`reproduce_baseline.py` は P0 で base/distill に対して実行済みだったが、
+**学習後のcheckpointへ向けては一度も走らせていなかった**。実装はそのまま使える。
+
+| 指標 | base | fp32 12,000 step |
+|---|---:|---:|
+| streaming TTFA（tts / voice_clone） | 84 / 126 ms | 84 / 127 ms |
+| streaming RTF（tts / voice_clone） | 0.425 / 0.475 | 0.435 / 0.496 |
+| **streaming vs offline（voice_clone）** | **完全一致** | **完全一致** |
+| streaming vs offline（tts） | 1.22e-03 | 2.45e-03 |
+| run1 vs run2（tts） | 3.58e-04 | 5.49e-04 |
+| peak VRAM | 1.89 GiB | 1.89 GiB |
+| ケース | 7/7 ok・corrupt 0 | 7/7 ok・corrupt 0 |
+
+**日本語評価で使う `voice_clone` は streaming と offline がビット一致する**
+（`api.py:247` の `decode_each_patch` が voice_clone で常に真になるため）。
+`tts` の乖離 2.45e-03 は −52 dB で、run間の再現性ノイズ 5.49e-04 と同オーダー。
+
+**学習によって streaming は壊れていない。** RTF は P0 の記録（1.89）より良いが、
+これは環境差（P0はWindowsでtritonが無く `eager`、ここはfull-sampler）であって
+modelの差ではない。
+
+### reference追随（S1ゴール、2026-09-02）
+
+4 reference × 3 text の多択で、生成音声のspeaker embeddingが
+正しいreferenceに最も近いかを見る。
+
+| checkpoint | split | 自己 | 他者 | 差 | 正答 |
+|---|---|---:|---:|---:|---:|
+| base | dev-zero-shot | 0.8520 | 0.5593 | +0.2927 | 12/12 |
+| **fp32 12,000** | dev-zero-shot | 0.8103 | 0.5634 | **+0.2469** | **12/12** |
+| base | dev-seen | 0.8318 | 0.5623 | +0.2694 | 12/12 |
+| fp32 12,000 | dev-seen | 0.8174 | 0.5911 | +0.2263 | 11/12 |
+
+**話者識別は保たれている**（zero-shot 12/12）。ただし差は base より縮んでおり
+（+0.2927 → +0.2469）、日本語学習の副作用として**話者追随がわずかに劣化**する。
+dev-seen の 11/12 は n=12 では誤差の範囲。
+
+**注意: base 自身が 12/12 で通る。** このテストは事前学習済みの話者条件づけが
+生きているかを見ているだけで、識別力は高くない。S1のゴール
+「seen と zero-shot の差の定量化」には、より鋭い指標（話者数を増やした
+SIM-o/SIM-r）が要る。
+
 ### 残る誤りの内訳（12,000 step、in_domain 30文）
 
 mean 22.76% に対し median 16.99% で、5.8pt の乖離がある。何が tail を作っているか。
