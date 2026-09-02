@@ -763,9 +763,29 @@ stop headが学習できず無限生成または早期停止、NaN/overflowの�
 
 日本語品質とzero-shot voice cloningの成立を確認し、S2へ拡大する構成を1つに絞る。
 
-### 状態: 学習を19回試行。**目標未達**（2026-09-01）
+### 状態: 原因確定・修正済み（2026-09-02）
 
-**305時間で学習しても、S0（7.15時間）の 28.4% に届かない。**
+**S1が失敗していた原因はデータではなく学習実装のバグだった（[R-020](07-risks-and-decisions.md)）。**
+公開checkpointの `qwen_backbone` / `locenc` は bf16 で、`AdamW` がそれを直接更新すると
+lr=2e-5 の更新量が bf16 の丸め幅を下回り、**3,000 step 回しても backbone は 3.68% しか
+動いていなかった**（`ParameterDrift` 実測。fp32 なら 100%）。
+学習されていたのは fp32 の DiT head だけで、**19回の試行はすべてこの条件下の観測**。
+
+修正後の到達点（評価set v3・600文・`--param-dtype float32`）:
+
+| 実行 | in_domain mean / median |
+|---|---:|
+| base | 35.86 / 31.91 |
+| bf16 対照 3,000 step | 31.21 / 28.00 |
+| fp32 3,000 step | 25.98 / 22.86 |
+| **fp32 12,000 step** | **21.78 / 18.90** |
+
+base → 12,000 step は **-14.09pt**（95%CI [-15.49, -12.75]、600文中440文で改善）。
+ASR床 10.4% に対し、TTS由来の誤りは **25.5pt → 11.4pt**（55%削減）。
+
+**以下は修正前の記録。結論はすべて再検証を要する。**
+
+305時間で学習しても、S0（7.15時間）の 28.4% に届かない。
 S1系の最良は **30.8%**（密なクラスタ17.5時間）。
 
 原因は2つに絞れた（[R-018](07-risks-and-decisions.md) / [R-019](07-risks-and-decisions.md)）:
@@ -796,13 +816,22 @@ gol 5ゲーム（326時間・1,197話者ID・215 GB）を vast.ai 上で前処�
 
 ### ゴール
 
-- [ ] Japanese CER、speaker similarity、自然性、アクセント、long-form安定性、
-      streaming latency/RTFが[06章](06-evaluation-plan.md)のprotocolで測定されている
-- [ ] seen speakerとzero-shot speakerの差が定量化されている
-- [ ] 英語・中国語の固定subsetでforgettingが測定されている
-- [ ] 比較実験（Patch Encoder train/freeze、100%日本語 vs replay混合、raw/normalized text）の
-      結果から、S2で使うconfigが1つに決まっている
-- [ ] streaming生成がoffline同等の品質を保っている
+- [x] **Japanese CER**（v3・600文、base 35.86% → **21.78%**）、
+      **streaming latency/RTF**（TTFA 84ms、RTF 0.435、peak VRAM 1.89 GiB）
+      — [ ] 自然性・アクセントは未測定（日本語向けの信頼できる自動指標が無い。
+      聴取での定性確認に置き換えるかの判断が要る）
+- [~] seen speakerとzero-shot speakerの差 — 測定はしたが
+      **指標が鈍い**（zero-shot 12/12・差 +0.247 だが base 自身も 12/12 で通る）。
+      本当に定量化するには話者数を増やした SIM-o / SIM-r が要る
+- [x] **英語・中国語のforgetting**（[R-022](07-risks-and-decisions.md)）—
+      英語 WER 1.7% で無傷、**中国語 CER 11.5% → 77.2% で壊滅**。
+      原因は忘却ではなく**漢字の読みが日本語に上書きされたこと**
+- [~] S2で使うconfig — **fp32 master weights は必須**（R-020）、
+      **step数は12,000でも飽和しない**（5,000→12,000 で -2.78pt）、
+      **データ量よりstep数が効く**（19倍のデータで -1.90pt vs 4倍のstepで -4.20pt）。
+      Patch Encoder train/freeze と replay混合比は未実施
+- [x] **streaming生成がoffline同等** — `voice_clone` は**ビット一致**、
+      7/7 ok・corrupt 0。`tts` の乖離 2.45e-03 は −52 dB で再現性ノイズと同オーダー
 
 **out_of_domain（数字・固有名詞）はS1のゴールに含めない（D-026）。**
 golのcorpusで数字を含む文は1.3%しかなく、データ量では解決しないため。
