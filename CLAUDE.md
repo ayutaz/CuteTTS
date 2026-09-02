@@ -244,8 +244,9 @@ S1のデータは [tts-dataset/cutetts-ja-latents](https://huggingface.co/datase
 - **n=30 の評価setで 2〜3pt の差を語らない。** 検出できる最小差は **6.9pt**。
   `scripts/summarize_eval_runs.py --compare A B` で信頼区間を必ず出す。
   **評価set v3（`data/eval/eval_set_v3.json`、600文）を使うこと**（MDE 1.5〜2.0pt）。
-  n=30 は効果量を約55%過大評価する（実測: -8.07pt → v3 では -5.23pt）。
-  tail の重い分布を少数標本で平均すると外れ値が効果量を押し上げる。
+  少数標本では点推定が大きく振れる（同じcheckpointで v2 -8.07pt / v3 -5.23pt。
+  v2のCI [-13.22,-3.02] は v3 の値を含むので矛盾ではない）。
+  **点推定の順位ではなく信頼区間で判断する。** 補正係数をかけて使うことはできない。
 - **打ち切り生成をCERに混ぜない（R-021）。** `max_decode_length`（64.0秒）
   張り付きは停止の失敗であって発音誤りではない。`summarize_eval_runs.py` が
   打ち切り率を別勘定で出す。停止健全性はCERとは独立のゲートとして扱う。
