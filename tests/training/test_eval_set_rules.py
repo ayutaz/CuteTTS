@@ -84,3 +84,27 @@ def test_too_short_is_excluded():
 def test_kana_only_is_excluded():
     """漢字・カタカナが1文字も無い文は落とす（第3条件）。"""
     assert has_lexical_content("それはとてもよいことだとおもいますけれど") is False
+
+
+def _module():
+    return _load()
+
+
+@pytest.mark.parametrize("a,b", [
+    ("でも大丈夫。気持ちは届いてるからさ、ここに", "でも大丈夫 気持ちは届いてるからさここに"),
+    ("それがさくらさんの希望的観測にすぎない？", "それがさくらさんの希望的観測にすぎない！"),
+    ("１２３のテスト文です", "123のテスト文です"),
+])
+def test_normalized_text_key_matches_variants(a, b):
+    """句読点・記号・全角半角の違いを吸収して同一と判定すること。
+
+    同じ台詞が別の発話IDで学習に入っていると、IDの除外だけでは素通りする。
+    gol は同一台詞が複数gameに現れる。
+    """
+    key = _module().normalized_text_key
+    assert key(a) == key(b)
+
+
+def test_normalized_text_key_separates_different_sentences():
+    key = _module().normalized_text_key
+    assert key("今日は晴れです") != key("明日は雨です")

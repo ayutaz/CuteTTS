@@ -104,14 +104,29 @@ def has_lexical_content(text: str) -> bool:
     return True
 
 
+def normalized_text_key(text: str) -> str:
+    """テキスト同士の一致判定に使う正規化。
+
+    同じ台詞が別の発話IDで学習に入っていると、IDの除外だけでは
+    素通りしてしまう。gol は同一台詞が複数gameに現れる。
+    """
+    folded = unicodedata.normalize("NFKC", text)
+    return re.sub(r"[\s、。「」『』・…‥！？!?,.\-―ー~〜\"'()（）]", "", folded)
+
+
 def pick_in_domain(metadata_tsv: Path, exclude_ids: set[str], *, count: int, seed: int,
-                   scan_limit: int = 2_000_000) -> list[dict]:
+                   scan_limit: int = 2_000_000,
+                   exclude_texts: set[str] | None = None) -> list[dict]:
     """gol の metadata.tsv から、学習に使わない発話を決定的に選ぶ。
 
     手元のmanifestは取得済みtarに限られるため、評価setは
     **gol全体のmetadata**から選ぶ。こうすると学習データが増えても
     評価setを作り直さずに済む（除外IDで弾く）。
+
+    ``exclude_texts`` には学習manifestのテキストを正規化したものを渡す。
+    **IDの除外だけでは足りない**（同一台詞が別IDで学習に入りうる）。
     """
+    excluded_texts = exclude_texts or set()
     generic = text_rules.generic_speaker_ids()
     candidates: list[dict] = []
     with metadata_tsv.open(encoding="utf-8", newline="") as handle:
@@ -136,6 +151,8 @@ def pick_in_domain(metadata_tsv: Path, exclude_ids: set[str], *, count: int, see
             if not re.search(r"[ぁ-んァ-ヶ一-龥]", text):
                 continue
             if not has_lexical_content(text):
+                continue
+            if normalized_text_key(text) in excluded_texts:
                 continue
             try:
                 seconds = float(duration)
@@ -171,6 +188,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="ここに含まれる utterance は in_domain から除外する")
     parser.add_argument("--out", default="data/eval/s0_eval_set.json")
     parser.add_argument("--in-domain-count", type=int, default=30)
+    parser.add_argument("--scan-limit", type=int, default=2_000_000,
+                        help="metadata.tsv を読む行数の上限")
     parser.add_argument("--seed", type=int, default=20260831)
     parser.add_argument("--artifact-root", default="artifacts")
     parser.add_argument("--timestamp")
@@ -181,12 +200,23 @@ def main() -> None:
     args = build_parser().parse_args()
     run_dir = artifacts.new_run_dir("s0-evalset", args.artifact_root, timestamp=args.timestamp)
 
-    train_ids = {r.utterance_id for r in load_manifest(args.train_manifest)}
-    print(f"学習manifest: {len(train_ids):,} 発話（in_domain から除外する）")
+    train_ids: set[str] = set()
+    train_texts: set[str] = set()
+    for record in load_manifest(args.train_manifest):
+        train_ids.add(record.utterance_id)
+        train_texts.add(normalized_text_key(record.text_raw or ""))
+    print(f"学習manifest: {len(train_ids):,} 発話 / {len(train_texts):,} 異なりテキスト"
+          f"（in_domain から除外する）")
 
     in_domain = pick_in_domain(Path(args.gol_metadata), train_ids,
-                               count=args.in_domain_count, seed=args.seed)
+                               count=args.in_domain_count, seed=args.seed,
+                               scan_limit=args.scan_limit,
+                               exclude_texts=train_texts)
     print(f"in_domain: {len(in_domain)} 文（{len({x['speaker_id'] for x in in_domain})} 話者）")
+    if len(in_domain) < args.in_domain_count:
+        raise SystemExit(
+            f"候補が足りない（{len(in_domain)} / {args.in_domain_count}）。"
+            "--scan-limit を増やすか count を下げること")
 
     payload = {
         "version": 2,
