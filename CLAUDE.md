@@ -203,11 +203,14 @@ src/cutetts/training/   P1: artifacts, manifest, text_rules, pairing,
                             latents, speaker_cache, voice_clusters
                         P2: objectives, collator, dataset, forward,
                             packing, checkpointing, prompt
-                        S1: evalstats（対応のある検定・打ち切り勘定）
+                        S1: evalstats（対応のある検定・打ち切り勘定）,
+                            reading（漢数字の読み展開 = J2）
 scripts/                reproduce_baseline, analyze_japanese_tokenizer,
                         evaluate_japanese_vae, prepare_japanese_manifest,
                         cache_audio_latents, build_voice_clusters,
-                        summarize_eval_runs（CER横断集計・信頼区間）
+                        summarize_eval_runs（CER横断集計・信頼区間）,
+                        evaluate_forgetting, build_numeral_eval_set,
+                        synthesize_japanese（J2つき合成entrypoint）
                         S0: train_continual, diagnose_flow_loss,
                             check_reference_following, build_eval_set,
                             evaluate_japanese_cer
