@@ -4,6 +4,7 @@
 model/
 artifacts/
 data/
+checkpoints/
 build/
 dist/
 *.egg-info/
