@@ -39,6 +39,7 @@ import torchaudio
 
 from cutetts import CuteTTS
 from cutetts.training import artifacts
+from cutetts.training.reading import expand_kanji_numerals, to_arabic_numerals
 
 ASR_MODEL = "kotoba-tech/kotoba-whisper-v2.0"
 _PUNCT = re.compile(r"[\s、。「」『』・…‥！？!?,.\-―ー~〜\"'()（）]")
@@ -95,6 +96,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-decode-length", type=int, default=400)
     parser.add_argument("--label", default="baseline", help="artifactに残す識別名")
+    parser.add_argument("--expand-numerals", action="store_true",
+                        help="生成前に漢数字を読み（仮名）へ展開する（J2 / D-008）。CERは元のtextに対して測るので、比較はそのまま成立する")
     parser.add_argument("--save-samples", type=int, default=6,
                         help="保存する音声の数。artifacts配下（公開禁止）")
     parser.add_argument("--artifact-root", default="artifacts")
@@ -120,9 +123,12 @@ def main() -> None:
     for subset, items in payload["subsets"].items():
         for index, item in enumerate(items):
             text = item["text"]
+            # **CERは元のtextに対して測る。** 展開するのは生成への入力だけなので、
+            # 展開なしの実行とそのまま比較できる。
+            spoken = expand_kanji_numerals(text) if args.expand_numerals else text
             try:
                 result = model.generate(
-                    text, mode=args.mode,
+                    spoken, mode=args.mode,
                     reference_audio=args.reference_audio if args.mode == "voice_clone" else None,
                     seed=args.seed, max_decode_length=args.max_decode_length,
                     show_progress=False,
@@ -134,9 +140,15 @@ def main() -> None:
             waveform = result.waveform
             hypothesis = asr(waveform.to(device), result.sample_rate)
             value = cer(text, hypothesis)
+            # **数字の表記に依存しないCERも残す。** ASRは音声を聞いて `1280円` と
+            # 書くが、参照は `千二百八十円`。正しく読めているほど素のCERは
+            # 上がってしまい、J2（読み展開）の効果が測れない。
+            numeric = cer(to_arabic_numerals(text), to_arabic_numerals(hypothesis))
             rows.append({
                 "subset": subset, "index": index, "text": text,
                 "hypothesis": hypothesis, "cer": value,
+                "cer_numeric": numeric,
+                "spoken": None if spoken == text else spoken,
                 "seconds": waveform.shape[-1] / result.sample_rate, "status": "ok",
             })
             if saved < args.save_samples:
@@ -149,12 +161,17 @@ def main() -> None:
     for subset in payload["subsets"]:
         values = [r["cer"] for r in rows
                   if r["subset"] == subset and r.get("status") == "ok" and r.get("cer") is not None]
+        numeric = [r["cer_numeric"] for r in rows
+                   if r["subset"] == subset and r.get("status") == "ok"
+                   and r.get("cer_numeric") is not None]
         if not values:
             summary[subset] = {"n": 0}
             continue
         values_sorted = sorted(values)
         summary[subset] = {
             "n": len(values),
+            "cer_numeric_mean": statistics.mean(numeric) if numeric else None,
+            "cer_numeric_median": statistics.median(numeric) if numeric else None,
             "cer_mean": statistics.mean(values),
             "cer_median": statistics.median(values),
             "cer_p90": values_sorted[int(len(values) * 0.9) - 1] if len(values) >= 10 else None,
