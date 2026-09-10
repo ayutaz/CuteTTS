@@ -53,6 +53,23 @@
 - extended vocabulary size 16,385
 - Qwen3系configと7-layer keep設定
 
+### 学習コードの公開状況（2026-09-10確認）
+
+**確認済み: 公式にもコミュニティにも学習コードは存在しない。**
+
+- [upstream issue #1](https://github.com/OPPO-Mente-Lab/CuteTTS/issues/1)（2026-09-06）で
+  学習コードとconfigの公開が要望され、論文第一著者のYuqian Zhang（`rulerman`）が
+  2026-09-07に回答した: 「training configurationは論文のappendixを参照。
+  training codeは当面open-source化の予定はない。簡単なfine-tuningならAIで実装できるだろう」
+- GitHubのfork 8件のうち、upstream以降にpushがあるのはこのforkだけ
+- GitHubのcode検索で `CuteTTSModel` / `from cutetts` / `OPPOer/CuteTTS` を探しても、学習系の実装は見つからない。
+  ヒットしたのはupstream本体と、推論の組み込み（`xRetr00/Marvi-OS`）、awesome-list、論文要約だけ
+- Hugging Face: `OPPOer/CuteTTS` を base_model に指定した派生modelは0件。
+  `niobures/CuteTTS` はupstreamの推論コードzip + weight + 論文PDFのミラーで、学習コードは入っていない。
+  `hugging-apps/cutetts-demo` はHF公式チームが作った推論demo
+- 論文appendixが明記している精度は **VAEのFP32だけ**。base / distillの学習精度は書かれていない。
+  appendixのhyperparameterは[04章](04-training-implementation.md)第3節の値と一致する
+
 ## ローカル実装
 
 このforkで確認した主要file:
