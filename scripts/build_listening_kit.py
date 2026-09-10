@@ -41,6 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import soundfile as sf  # noqa: E402
 
 from cutetts import CuteTTS  # noqa: E402
+from cutetts.training.listening_page import render  # noqa: E402
 from cutetts.training.reading import expand_kanji_numerals  # noqa: E402
 
 
@@ -54,7 +55,9 @@ def pick(items: list, count: int, seed: int) -> list:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="聴取用の音声を生成する")
-    parser.add_argument("--model-dir", required=True)
+    parser.add_argument("--model-dir", help="推論用export。--html-only なら不要")
+    parser.add_argument("--html-only", action="store_true",
+                        help="音声を作り直さず index.html だけ書き直す")
     parser.add_argument("--base-dir", default="model/CuteTTS",
                         help="比較対象の未学習checkpoint")
     parser.add_argument("--eval-set", default="data/eval/eval_set_v3.json")
@@ -69,10 +72,49 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def write_page(out: Path) -> None:
+    """manifest と アンカー音源から index.html を書く。"""
+    manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    anchors = manifest.get("anchors") or []
+    if not anchors:
+        anchors = add_local_anchors(out, manifest["seed"])
+        manifest["anchors"] = anchors
+        (out / "manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    (out / "index.html").write_text(render(manifest, anchors), encoding="utf-8")
+    print(f"index.html を書きました（アンカー {len(anchors)}本）")
+
+
+def add_local_anchors(out: Path, seed: int, count: int = 4) -> list[dict]:
+    """人間の実音声をアンカーとして取り込む。ASR床10.4%を測った音源。"""
+    floor = Path("data/eval/asr_floor")
+    if not (floor / "items.json").is_file():
+        return []
+    items = json.loads((floor / "items.json").read_text(encoding="utf-8"))
+    items = items if isinstance(items, list) else items.get("items", [])
+    anchors: list[dict] = []
+    for item in pick([i for i in items if i.get("group") == "plain"], count, seed):
+        source = floor / item["wav"]
+        if not source.is_file():
+            continue
+        data, rate = sf.read(source)
+        name = f"human_{len(anchors):02d}.wav"
+        sf.write(out / "audio" / name, data, rate)
+        anchors.append({"file": name, "model": "human",
+                        "group": "アンカー", "text": item["text"]})
+    return anchors
+
+
 def main() -> None:
     args = build_parser().parse_args()
     out = Path(args.out)
     (out / "audio").mkdir(parents=True, exist_ok=True)
+
+    if args.html_only:
+        write_page(out)
+        return
+    if not args.model_dir:
+        raise SystemExit("--model-dir が要る（--html-only なら不要）")
 
     payload = json.loads(Path(args.eval_set).read_text(encoding="utf-8"))
     numerals = json.loads(Path(args.numeral_set).read_text(encoding="utf-8"))
@@ -145,7 +187,8 @@ def main() -> None:
     }
     (out / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"完了: {out}  音声 {len(entries) + len(anchors)} 本")
+    write_page(out)
+    print(f"完了: {out}  音声 {len(list((out / 'audio').glob('*.wav')))} 本")
 
 
 if __name__ == "__main__":
