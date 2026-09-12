@@ -53,7 +53,15 @@ uv pip install --python .venv/Scripts/python.exe torch==2.5.1 torchaudio==2.5.1 
   --index-url https://download.pytorch.org/whl/cu121
 uv pip install --python .venv/Scripts/python.exe -e .
 uv pip install --python .venv/Scripts/python.exe pytest pyyaml triton-windows
+
+# J3（読み付与）を使うとき。**upstream推論には不要なので core には入っていない**
+uv pip install --python .venv/Scripts/python.exe -e ".[ja]"
 ```
+
+`[ja]` は `pyopenjtalk-plus`（+ 必須依存の sudachipy / sudachidict-core、計332MB）。
+4候補を実測比較して選んだ（D-035）。**`[onnxruntime]` extra は入れない**
+— 有効化しても14語すべて結果が同一で、架空の人名も直らなかった。
+`pyopenjtalk` 本家は Windows wheel が無くビルドが失敗する。**fork の `-plus` を使う。**
 
 `uv` が無ければ `py -3.12 -m venv .venv` で作り、以降は
 `.venv/Scripts/python.exe -m pip install ...` で代用できる。

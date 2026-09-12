@@ -34,6 +34,21 @@ dev = [
   "pytest>=8,<10",
   "pyyaml>=6,<7",
 ]
+# 日本語継続学習の読み付与（J3 / D-035）。**upstreamの推論には不要**なので
+# core の dependencies には入れない。`pip install -e .[ja]` で入る。
+#
+# pyopenjtalk-plus を選んだ理由（実測。D-035 と 08章 J3 に詳細）:
+#   - 読み 12/14。fugashi+unidic-lite と SudachiPy は 10/14、janome は 8/14
+#   - 記号を壊さない。SudachiPy は `――` を `きごうきごう` にする
+#   - 表記ではなく**発音形**を返す（今日→キョー、中華→チューカ）
+#   - アクセント情報（full-context label）も取れる
+#   - MIT + 辞書はNAISTのBSD系。Windows wheel があり**ビルド不要**
+#
+# `[onnxruntime]` extra は**入れない**。有効化しても14語すべて結果が同一で、
+# 架空の人名（`聖`→キヨシ）も直らなかった。100MB超を効果ゼロで抱えることになる。
+ja = [
+  "pyopenjtalk-plus>=0.4,<1",
+]
 
 [project.scripts]
 cutetts = "cutetts.cli:main"
