@@ -17,15 +17,19 @@
 **upstream の推論pathには触らない。** `cutetts` CLI と `api.py` はそのままで、
 ここは「日本語向けのtext前処理を掛けてから公開APIを呼ぶ」薄い層にすぎない。
 
-前処理は現在ひとつだけ:
+前処理はふたつ:
 
 * **漢数字の読み展開（J2 / D-008）** — `千二百八十円` → `せんにひゃくはちじゅう円`。
   学習コーパスに複合漢数字は 0.32% しかなく桁の合成規則を学べないが、
   仮名なら既に読める。専用評価set 200文で **-11.80pt**
   （95%CI [-17.45, -6.00]、有意）。**再学習を要しない。**
 
-既定で有効。数詞を含まない文には何もしないので、常時掛けてよい
-（in_domain 600文で悪化しないことを確認済み）。無効にするには `--raw-text`。
+  既定で有効。数詞を含まない文には何もしないので常時掛けてよい
+  （in_domain 600文で悪化しないことを確認済み）。無効にするには `--raw-text`。
+* **短いreferenceの延長（R-026）** — 3〜4秒のreferenceでは声質と抑揚が崩れる。
+  同一話者・同一文で人間と聴き比べると、劣る側の最大3.9秒 < 近い側の最小8.2秒で
+  境界が重ならなかった。学習時は平均9.61秒。既定の下限は8秒で、
+  `--min-reference-seconds 0` で無効化できる。
 
     python scripts/synthesize_japanese.py \\
         --model-dir checkpoints/s1v2-fp32-30000 \\
@@ -46,6 +50,11 @@ import soundfile as sf  # noqa: E402
 
 from cutetts import CuteTTS  # noqa: E402
 from cutetts.training.reading import expand_kanji_numerals  # noqa: E402
+from cutetts.training.reference import (  # noqa: E402
+    DEFAULT_MINIMUM_SECONDS,
+    duration_seconds,
+    ensure_minimum_duration,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -64,6 +73,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="400 patch = 64.0秒。張り付くと停止に失敗している（R-021）")
     parser.add_argument("--raw-text", action="store_true",
                         help="読み展開を行わない。素のtextをそのまま渡す")
+    parser.add_argument("--min-reference-seconds", type=float,
+                        default=DEFAULT_MINIMUM_SECONDS,
+                        help="referenceがこれより短ければ繰り返して伸ばす（R-026）。"
+                             "0 で無効")
     return parser
 
 
@@ -74,10 +87,22 @@ def main() -> None:
     if spoken != args.text:
         print(f"読み展開: {args.text}\n        → {spoken}")
 
+    # **短いreferenceは伸ばす。** 同一話者・同一文で人間と聴き比べると、
+    # 3〜4秒のreferenceでは声質と抑揚が崩れた（R-026）。学習時は平均9.61秒。
+    reference = args.reference_audio
+    if args.mode == "voice_clone" and args.min_reference_seconds > 0:
+        before = duration_seconds(reference)
+        reference = str(ensure_minimum_duration(
+            reference, minimum_seconds=args.min_reference_seconds))
+        if reference != str(Path(args.reference_audio).expanduser().resolve()):
+            print(f"reference を延長: {before:.2f}秒 → "
+                  f"{duration_seconds(reference):.2f}秒（下限 "
+                  f"{args.min_reference_seconds:g}秒）")
+
     model = CuteTTS.from_pretrained(args.model_dir, device=args.device)
     result = model.generate(
         spoken, mode=args.mode,
-        reference_audio=args.reference_audio if args.mode == "voice_clone" else None,
+        reference_audio=reference if args.mode == "voice_clone" else None,
         seed=args.seed, max_decode_length=args.max_decode_length,
     )
 
