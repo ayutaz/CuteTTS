@@ -1,6 +1,6 @@
 ---
 name: cutetts-ja-pipeline
-description: Use when running, resuming, or debugging any CuteTTS Japanese continual-training phase (P0 baseline, P1b tokenizer, P1c VAE, P1d manifest, P1e latent cache, S0 training and CER evaluation, S1 preprocessing on vast.ai) in this repository — covers setup, the venv, GPU rules, running jobs on vast.ai, publishing preprocessed data to Hugging Face, exact commands with their inputs and outputs, and the traps that make these scripts silently produce wrong results.
+description: Use when running, resuming, or debugging any CuteTTS Japanese continual-training phase in this repository (P0 baseline, P1b tokenizer, P1c VAE, P1d manifest, P1e latent cache, S0/S1 training, CER evaluation with the v3 600-sentence set, forgetting, streaming, listening kits, numeral reading J2, and the planned J3/J4/T1/T2/M1 phases) — covers setup, the venv, GPU rules, running jobs on vast.ai, publishing preprocessed data to Hugging Face, exact commands with their inputs and outputs, the fp32 master-weight requirement that made training work at all, and the measurement defects and silent failures that repeatedly produced wrong conclusions.
 ---
 
 # CuteTTS 日本語学習パイプラインの実行
@@ -9,7 +9,29 @@ P0/P1/S0/S1 スクリプトを実際に完走させるためのリファレン�
 実測値は [`docs/japanese-training/RESULTS.md`](../../../docs/japanese-training/RESULTS.md)、
 フェーズ定義は `docs/japanese-training/08-execution-plan.md`。
 
-## 実行前に必ず守る2点
+## 学習と評価で必ず守ること（これを外すと結論が壊れる）
+
+1. **`--param-dtype float32` を必ず付ける（既定）。** 公開checkpointは
+   `qwen_backbone` / `locenc` が bf16 で、`AdamW` が直接更新すると lr=2e-5 の
+   更新量が丸め幅を下回り、**3,000 step 回しても backbone は 3.68% しか動かない**（R-020）。
+   S0/S1 の19回はすべてこの状態で、**実質 head だけを学習していた**。
+   毎runの metrics にある `parameter_moved_ratio` が 100% 付近かを確認する。
+2. **評価は v3（`data/eval/eval_set_v3.json`、in_domain 600文）を使う。**
+   旧 v2 は30文で、検出できる最小差が **6.9pt**。S1で比較した2〜3ptの差は
+   すべてその下にあり、**step数の順位すら取り違えていた**。
+   差は必ず `scripts/summarize_eval_runs.py --compare A B` で信頼区間を出す。
+3. **CERの読み方を間違えない。** 素のCERは
+   (a) 打ち切り生成を発音誤りとして数え（R-021）、
+   (b) `1280円` と `千二百八十円` を不一致とする（R-023）。
+   打ち切りは `mean_excluding_truncated`、数詞は `cer_numeric` を見る。
+
+### 現在の最良checkpoint
+
+`checkpoints/s1v2-fp32-30000/`（ローカル退避済み、`strict=True` でロード確認済み）。
+v3 で in_domain **20.10 / 16.67**（base 35.86 / 31.91、ASR床 10.4）。
+盲検A/Bで 15/18（83%、p=0.0038）と知覚できる差がある。
+
+## 実行環境とGPUの規約
 
 1. **Python は必ず `.venv/Scripts/python.exe`。** リポジトリルートから実行する。
    システム既定は3.14で torch 2.5.1 が動かない（対応は3.9〜3.12）。
@@ -77,6 +99,11 @@ data/raw/moe/info.csv         # 同上の話者一覧
 | — | `benchmark_training_memory.py` | **要** | `model/CuteTTS` | VRAM/throughput の実測 |
 | s1 | `measure_asr_floor.py` | **要**（`--build` は不要） | gol metadata + tars | `artifacts/asr-floor/<ts>/` |
 | s1 | `s1_preprocess.sh` | **要** | HF（gol）+ `HF_TOKEN` | latent cache を HF へ upload |
+| s1 | `summarize_eval_runs.py` | 不要 | `artifacts/**/metrics.json` | 横断集計・対応のある検定（信頼区間つき） |
+| s1 | `evaluate_forgetting.py` | **要** | checkpoint | `artifacts/forgetting/<ts>/`（英語WER / 中国語CER） |
+| j2 | `build_numeral_eval_set.py` | 不要 | — | `data/eval/numeral_eval_set.json`（200文・桁1〜7） |
+| j2 | `synthesize_japanese.py` | **要** | checkpoint, text | wav。**J2（読み展開）が既定で有効** |
+| m1 | `build_listening_kit.py` | **要**（`--html-only` は不要） | checkpoint, eval set | `artifacts/listen-kit/`（盲検A/B + アンカー + 書き出し） |
 
 **依存順序**: `prepare_japanese_manifest` → `cache_audio_latents` → `build_voice_clusters`
 → `train_continual` → `diagnose_flow_loss` / `evaluate_japanese_cer` / `check_reference_following`。
@@ -112,21 +139,41 @@ jq '.summary' artifacts/p0/*/metrics.json   # gate_passed は true/false。error
 # split は split_group_id 単位で切り直す。漏れがあれば異常終了する
 .venv/Scripts/python.exe scripts/build_voice_clusters.py --threshold 0.92
 
-# --- S0 ---
-# 評価set（CPU）。学習前に作り、基準線を測ってからゲート値を固定する
-.venv/Scripts/python.exe scripts/build_eval_set.py
+# --- 評価set ---
+# in_domain 600文（CPU、数分）。**学習manifestをテキストでも照合して漏洩0を確認する**
+.venv/Scripts/python.exe scripts/build_eval_set.py   --train-manifest data/manifests/all_clustered.jsonl   --in-domain-count 600 --scan-limit 4000000   --out data/eval/eval_set_v3.json --seed 20260903
 
+# 数詞専用（CPU、即時）。J2の効果を測るため
+.venv/Scripts/python.exe scripts/build_numeral_eval_set.py --count 200
+
+# --- 学習 ---
 # 基準線CER（GPU）。学習前に必ず測る
-python scripts/evaluate_japanese_cer.py --label baseline --device cuda
+python scripts/evaluate_japanese_cer.py --model-dir model/CuteTTS   --eval-set data/eval/eval_set_v3.json --label v3-base --device cuda
 
-# 学習（GPU）。S0の通過実績がある設定
-python scripts/train_continual.py --steps 3000 --batch-size 4 --lr 2e-5   --warmup 100 --save-every 1000 --group-key voice_cluster_id   --condition-dropout 0.1 --out checkpoints/s0 --device cuda
+# 学習（GPU）。**--param-dtype float32 が必須**（既定。R-020）
+# 30,000 step で v3 20.10%。収穫逓減あり（20,000→30,000 は -0.96pt）
+python scripts/train_continual.py --steps 30000 --batch-size 4 --lr 2e-5   --warmup 100 --group-key voice_cluster_id --condition-dropout 0.1   --param-dtype float32 --save-every 10000 --export-every-save   --eval-every 10000 --out checkpoints/run --device cuda
 
-# 学習後（GPU）。この3本を必ず回す。1本ずつ直列
-python scripts/diagnose_flow_loss.py --model-dir checkpoints/s0/inference --device cuda
-python scripts/diagnose_flow_loss.py --model-dir model/CuteTTS --label base --device cuda
-python scripts/evaluate_japanese_cer.py --model-dir checkpoints/s0/inference   --label trained --device cuda
-python scripts/check_reference_following.py --model-dir checkpoints/s0/inference   --split dev-seen --references 4 --device cuda
+# 旧挙動を再現したいときだけ（A/B検証用）
+#   --param-dtype checkpoint
+
+# --- 学習後（GPU）。1本ずつ直列 ---
+python scripts/evaluate_japanese_cer.py --model-dir checkpoints/run/inference   --eval-set data/eval/eval_set_v3.json --label v3-trained --device cuda
+python scripts/evaluate_japanese_cer.py --model-dir checkpoints/run/inference   --eval-set data/eval/numeral_eval_set.json --label numerals --expand-numerals
+python scripts/check_reference_following.py --model-dir checkpoints/run/inference   --split dev-zero-shot --references 4 --device cuda
+python scripts/evaluate_forgetting.py --model-dir checkpoints/run/inference --label trained
+python scripts/reproduce_baseline.py --model-root checkpoints/run --checkpoint inference
+
+# --- 集計（CPU）。**点推定の順位ではなく信頼区間で判断する** ---
+.venv/Scripts/python.exe scripts/summarize_eval_runs.py
+.venv/Scripts/python.exe scripts/summarize_eval_runs.py --compare v3-base v3-trained
+
+# --- 合成（GPU）。J2が既定で有効 ---
+python scripts/synthesize_japanese.py --model-dir checkpoints/s1v2-fp32-30000   --text "価格は千二百八十円、消費税込みです。" --output out.wav
+
+# --- 聴取キット（GPU。HTMLだけ作り直すなら --html-only でCPU） ---
+python scripts/build_listening_kit.py --model-dir checkpoints/run/inference   --out artifacts/listen-kit
+.venv/Scripts/python.exe scripts/build_listening_kit.py --html-only --out artifacts/listen-kit
 ```
 
 **学習後の判定は `diagnose_flow_loss` を base と学習後の両方で回して比較する。**
@@ -221,6 +268,14 @@ yes | vastai destroy instance <id>
 | reference追随が学習で悪化する | voiceクラスタに別の声が混ざっている。単連結は連鎖で巨大クラスタを作る。`--linkage complete`（既定）を使い、`build_voice_clusters.py` が出す「クラスタ内の最小cos」が閾値以上かを見る（R-014） |
 | zero-shotがzero-shotでない | splitを `voice_cluster_id`（細かい）で切っている。**`split_group_id`（単連結・粗い）で切る**。`build_voice_clusters.py` は漏れがあれば異常終了する |
 | `ms/step` が異常な値 | 表示のみのバグ。save のたびに `state.step` が進むため分母が壊れる（修正済み） |
+| **loss は下がるのにデータを増やしても効かない** | bf16パラメータを `AdamW` が直接更新している。lr=2e-5 の更新量が丸め幅を下回り、**backboneが3.68%しか動かない**（R-020）。`--param-dtype float32`。metricsの `parameter_moved_ratio` が100%付近かを見る |
+| **2〜3ptの差で方針を決めてしまう** | v2（30文）の検出限界は6.9pt。**step数の順位を取り違えた実績がある**。v3（600文）を使い、`summarize_eval_runs.py --compare` で信頼区間を出す |
+| **打ち切り生成をCERに数えてしまう** | `max_decode_length`（400 patch = 64.0秒）張り付きは停止の失敗で、発音誤りではない。S0系は0件、S1系は1〜7件あり、除外すると差がほぼ消えた（R-021）。`mean_excluding_truncated` を見る |
+| **数詞のCERが改善を隠す** | ASRは `1280円` と書くが参照は `千二百八十円`。**正しく読めるほど素のCERは悪化する**（R-023）。`cer_numeric`（数字正規化CER）を見る。J2の効果は素のCERで +3.1pt、正規化CERで -11.80pt と符号が逆になる |
+| **dev flow の分離を過適合と読む** | 30,000 step で dev-zero-shot flow は base より悪化するが、CERは改善し話者追随も保たれた。**flow lossは品質の指標にならない**（R-015の3例目） |
+| 誤読が直らない | 主因は byte-fallback。`華` は単独pieceを持たず3つのバイト断片になる（R-027）。仮名に置き換えると直る（`中華`→`ちゅうか`、`湊`→`みなと`）。J3で機械化する |
+| 中国語が壊れている | **仕様**。日本語学習で漢字の読みが上書きされ、CER 11.5% → 77.2%（R-022）。D-032で日本語特化と決定。英語は無傷（WER 1.7%）。中国語CERは回帰の監視指標としてのみ使う |
+| **交絡を確かめずに因果と判断する** | 6点が reference長で完全分離したので原因と考えたが、**対象文の長さと r=0.947 で交絡**しており直接検証も一貫しなかった（R-026は棄却）。完全分離は交絡を確かめるまで証拠にならない |
 
 ## 環境の罠
 
@@ -235,6 +290,9 @@ yes | vastai destroy instance <id>
 | 途中で落ちた | `artifacts/<phase>/<ts>/` に metrics.json が無ければ未完。消してよい。cacheは再開されるので消さない |
 | `AttributeError: 'GenerationResult' object has no attribute ...` | `tts.generate()` は tensor ではなく `GenerationResult` を返す。`.waveform` と `.sample_rate` を取る |
 | CUDA generator エラー | CPU generator を CUDA device で使った。`objectives._randn` が吸収するが、新しい乱数経路を足すときは同じ扱いにする |
+| **生成したコードが無言で壊れる** | bash heredoc（`<<'PY'` でも）経由でPythonへ渡すと**バックスラッシュが1段落ちる**。`\1` が 0x01 になり正規表現が死に、`'\n'` が生の改行になってJavaScriptが構文エラーになった（**2回踏んだ**）。**生成コードはWriteツールで `.py` に書いてから実行する。** 書き出したら括弧の対応と文字列リテラルを検査する |
+| **リモートジョブを二重起動する** | `timeout` で ssh が切れても**リモートプロセスは生き続ける**。死んだと判断して再起動し、GPUを並列で使った（規約違反）。**再起動の前に必ず `ps -eo pid,args \| grep <script>` で生存を確認する** |
+| `tail`/`grep` を通した進捗が出ない | パイプがバッファするため、プロセスが終わるまで1行も来ない。ファイルへ落としてから読む |
 
 ## データの前提（推測で埋めない）
 
