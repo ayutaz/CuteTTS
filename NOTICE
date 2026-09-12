@@ -1,6 +1,10 @@
 CuteTTS
 Copyright 2026 OPPO and Fudan University
 
+This fork adds Japanese continual-training code (training pipeline, datasets,
+objectives, evaluation, and the Japanese text frontend). Those additions are:
+Copyright 2026 ayutaz
+
 CuteTTS is licensed under the Apache License, Version 2.0, except for
 third-party portions identified below.
 
