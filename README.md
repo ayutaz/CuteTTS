@@ -1,131 +1,221 @@
-[EN](README.md) | [中文](README_zh.md)
+[日本語](README.md) | [EN](README_en.md) | [中文](README_zh.md)
 
-## <sup><sup><sup><img src="assets/logo.png" alt="CuteTTS logo" height="72" align="middle"></sup></sup></sup> CuteTTS: Efficient and High-Quality Speech Synthesis via Autoregressive Modeling of Continuous Latents
+## <sup><sup><sup><img src="assets/logo.png" alt="CuteTTS logo" height="72" align="middle"></sup></sup></sup> CuteTTS 日本語継続学習 fork
 
 <a href="https://huggingface.co/OPPOer/CuteTTS"><img src="https://img.shields.io/badge/%F0%9F%A4%97%20HF%20Model-CuteTTS-yellow" alt="CuteTTS Hugging Face model"></a>
-<a href="https://huggingface.co/OPPOer/CuteTTS-distill"><img src="https://img.shields.io/badge/%F0%9F%A4%97%20HF%20Model-CuteTTS--distill-orange" alt="CuteTTS-distill Hugging Face model"></a>
 <a href="https://arxiv.org/abs/2608.08638"><img src="https://img.shields.io/badge/Paper-CuteTTS-red" alt="paper"></a>
 
-- A lightweight (~230M-parameter) continuous autoregressive TTS model that runs efficiently on GPUs, CPUs, and Apple silicon.
-- Ultra-low latency: ~40 ms to the first audio chunk and a throughput of ~9× real time on an NVIDIA RTX 4090.
-- Excellent speech quality and voice cloning performance.
-- Web demo, Python API, and CLI.
-- Multilingual support: English, Chinese, French, German, and Spanish.
+**[OPPO-Mente-Lab/CuteTTS](https://github.com/OPPO-Mente-Lab/CuteTTS) の fork です。**
+公開base checkpoint `OPPOer/CuteTTS`（約230M・24 kHz・streaming）を起点に、
+**日本語の継続学習**を進めています。作業ブランチは `feat/japanese-training`。
+
+upstream は **推論専用**で、学習コード（trainer / dataset / loss / packing）を含みません。
+このforkが追加したのは `src/cutetts/training/`、`scripts/`、`tests/` です。
+**既存の推論pathは変更していません。**
+
+> upstream本体の説明（アーキテクチャ、多言語の性能表、Web demo）は
+> [README_en.md](README_en.md) にそのまま残してあります。
 
 <br>
 
-<img src="assets/cute_backbone.png" alt="CuteTTS architecture" width="100%">
+## 現在の到達点
+
+評価set v3（in_domain 600文）での実測です。
+
+| checkpoint | mean | median |
+|---|---:|---:|
+| base（未学習） | 35.86% | 31.91% |
+| **fp32 30,000 step** | **20.10%** | **16.67%** |
+| ASR床（人間の実音声） | 10.40% | — |
+
+base比 **-14.09 〜 -15.77pt**（95%CI [-17.26, -14.35]、600文中457文で改善）。
+TTS由来の誤りは **25.5pt → 9.7pt（62%削減）** です。
+
+**盲検A/Bで 15/18（83%、p=0.0038）** と、CERの改善は聴いて分かる差になっています。
+会話文では 13/14（93%、p=0.0009）で CER と聴取が一致します。
+
+| 項目 | 状態 |
+|---|---|
+| 日本語のCER | **base比 -15.77pt**（有意） |
+| 音韻（促音・撥音・長音・無声化） | 46.9% → **22.2%**（有意） |
+| 数詞の読み | **J2で -11.80pt**（有意。**再学習不要**） |
+| 話者追随（zero-shot） | 12/12、margin +0.247 |
+| streaming | `voice_clone` は offline と**ビット一致** |
+| 英語 | **無傷**（WER 1.7%、baseと同値） |
+| 中国語 | **壊滅**（CER 11.5% → 77.2%）。日本語特化と決定（D-032） |
+| 自然性・アクセント | **未測定**。日本語向けの信頼できる自動指標が無い |
+
+数値の一覧は [`docs/japanese-training/RESULTS.md`](docs/japanese-training/RESULTS.md)。
 
 <br>
 
-<img src="assets/performance.svg" alt="CuteTTS performance" width="85%">
+## 何が分かったか（S1の失敗の原因）
 
+**S1（100〜500時間）は19回の学習をすべて外しました。原因はデータではなく
+学習実装のバグでした。**
 
-## Install
+公開checkpointは `qwen_backbone` / `locenc` が bf16 です。`AdamW` がそれを直接更新すると、
+lr=2e-5 の更新量が bf16 の丸め幅（相対 2^-8）を下回り、round-to-nearest-even が
+**毎step更新を捨てます**。同じ向きに積み上がらないので、何step回しても動きません。
 
-**Using conda**
+| module | params | dtype | 更新が丸めで消える割合 |
+|---|---:|---|---:|
+| `qwen_backbone` | 126.9M | bf16 | **91.37%** |
+| `locenc` | 31.0M | bf16 | **84.15%** |
+| `head`（DiT） | 70.5M | fp32 | 0.00% |
+
+**実際に学習されていたのは fp32 の DiT head だけでした。** データを 7時間 →
+305時間に増やしても反応しないのは当然で、19回の試行はすべてこの条件下の観測です。
+
+修正（`--param-dtype float32` が既定）後、同一データ・同一step・同一seedの
+対照実験で **-8.07pt**（95%CI [-13.22, -3.02]、有意）。
+詳細は [R-020](docs/japanese-training/07-risks-and-decisions.md)。
+
+**学習するときは毎runの metrics にある `parameter_moved_ratio` を必ず確認してください。**
+100%付近でなければ、そのrunの比較は無意味です。
+
+<br>
+
+## 使う
+
+### セットアップ
+
+**Python 3.12 固定**です（torch 2.5.1 の対応は 3.9〜3.12。既定が3.13以降の環境では動きません）。
 
 ```bash
-conda create -n cutetts python=3.12 -y
-conda activate cutetts
-pip install torch==2.5.1 torchaudio==2.5.1  # For NVIDIA GPUs with CUDA 12.1, append: --index-url https://download.pytorch.org/whl/cu121
-pip install -e .
+uv venv --python 3.12 .venv
+uv pip install --python .venv/Scripts/python.exe torch==2.5.1 torchaudio==2.5.1 \
+  --index-url https://download.pytorch.org/whl/cu121     # CUDA 12.1
+uv pip install --python .venv/Scripts/python.exe -e .
+uv pip install --python .venv/Scripts/python.exe -e ".[ja]"    # 読み付与（J2/J3）
+uv pip install --python .venv/Scripts/python.exe -e ".[dev]"   # テスト
 ```
 
-**Download weights**
-
-Download [CuteTTS](https://huggingface.co/OPPOer/CuteTTS) or [CuteTTS-distill](https://huggingface.co/OPPOer/CuteTTS-distill) into `./model`:
+`uv` が無ければ `py -3.12 -m venv .venv` でも作れます。
+Windows では `triton-windows` も入れてください（未導入だと distill が全滅します）。
 
 ```bash
 mkdir -p ./model
 hf download OPPOer/CuteTTS --local-dir ./model/CuteTTS
-hf download OPPOer/CuteTTS-distill --local-dir ./model/CuteTTS-distill
 ```
 
-## Web demo
+### 日本語で合成する
 
 ```bash
-cutetts-demo --model-dir ./model --device auto --host 127.0.0.1 --port 7860
+.venv/Scripts/python.exe scripts/synthesize_japanese.py \
+  --model-dir checkpoints/s1v2-fp32-30000 \
+  --text "価格は千二百八十円、消費税込みです。" \
+  --reference-audio assets/default_reference.wav \
+  --output out.wav
 ```
 
-## Python
+**漢数字の読み展開（J2）が既定で有効**です。`千二百八十円` を
+`せんにひゃくはちじゅう円` に展開してから渡します。学習コーパスに複合漢数字は
+0.32% しかなく桁の合成規則を学べませんが、**仮名ならモデルが既に読めます**。
+数詞専用の評価set 200文で **-11.80pt**、通常の会話文600文では +0.02pt で副作用なしです。
+**再学習を要しません。** 無効にするには `--raw-text`。
 
-```python
-from cutetts import CuteTTS
-import soundfile as sf
+upstream の `cutetts` CLI と Python API はそのまま使えます（[README_en.md](README_en.md)）。
 
-model = CuteTTS.from_pretrained("/path/to/CuteTTS", device="auto")
-result = model.generate("The voice generated by this model sounds amazing!", mode="tts")
-sf.write("tts.wav", result.waveform.squeeze(0).numpy(), result.sample_rate)
-
-clone = model.generate(
-    "The voice generated by this model sounds amazing!",
-    mode="voice_clone",
-    reference_audio="assets/default_reference.wav",
-)
-sf.write("clone.wav", clone.waveform.squeeze(0).numpy(), clone.sample_rate)
-```
-
-### Streaming Python API
-
-`generate_stream()` yields decoded CPU `float32` PCM chunks as soon as they are ready:
-
-```python
-stream = model.generate_stream(
-    "The voice generated by this model sounds amazing!",
-    mode="voice_clone",
-    reference_audio="assets/default_reference.wav",
-)
-
-with sf.SoundFile(
-    "stream.wav",
-    mode="w",
-    samplerate=model.sample_rate,
-    channels=1,
-    subtype="PCM_16",
-) as output:
-    for chunk in stream:
-        output.write(chunk.waveform.squeeze(0).numpy())
-```
-
-## Command line
+### 学習する
 
 ```bash
-cutetts --model-dir /path/to/CuteTTS --mode tts --text "The voice generated by this model sounds amazing!" --output tts.wav
-
-cutetts --model-dir /path/to/CuteTTS-distill \
-  --mode voice_clone --reference-audio assets/default_reference.wav \
-  --text "The voice generated by this model sounds amazing!" --output clone.wav
+# **--param-dtype float32 が必須**（既定）
+.venv/Scripts/python.exe scripts/train_continual.py \
+  --steps 30000 --batch-size 4 --lr 2e-5 --warmup 100 \
+  --param-dtype float32 --group-key voice_cluster_id \
+  --save-every 10000 --export-every-save --out checkpoints/run --device cuda
 ```
 
-## Zero-shot voice-cloning performance
+**評価は v3（600文）を使ってください。** 旧v2（30文）は検出できる最小差が **6.9pt** で、
+step数の順位すら取り違えました。
 
-| <sub>Model</sub> | <sub>Params.</sub> | <sub>LibriSpeech test-clean WER (%) ↓</sub> | <sub>LibriSpeech test-clean SIM ↑</sub> | <sub>Seed-TTS EN WER (%) ↓</sub> | <sub>Seed-TTS EN SIM ↑</sub> | <sub>Seed-TTS ZH WER (%) ↓</sub> | <sub>Seed-TTS ZH SIM ↑</sub> |
-|:--|--:|--:|--:|--:|--:|--:|--:|
-| <sub>MOSS&#8209;TTS</sub> | <sub>8B</sub> | <sub>1.98</sub> | <sub>67.7</sub> | <sub>1.84</sub> | <sub>70.9</sub> | <sub>1.37</sub> | <sub>77.0</sub> |
-| <sub>Qwen3&#8209;TTS</sub> | <sub>1.7B</sub> | <sub>2.35</sub> | <sub>70.3</sub> | <sub>1.66</sub> | <sub>71.4</sub> | <sub><strong>0.91</strong></sub> | <sub>77.0</sub> |
-| <sub>FireRedTTS&#8209;2</sub> | <sub>1.5B</sub> | <sub>4.32</sub> | <sub>64.2</sub> | <sub>1.95</sub> | <sub>66.5</sub> | <sub>1.14</sub> | <sub>73.6</sub> |
-| <sub>MOSS&#8209;TTS&#8209;Nano</sub> | <sub>0.1B</sub> | <sub>4.10</sub> | <sub>48.4</sub> | <sub>4.62</sub> | <sub>49.9</sub> | <sub>3.13</sub> | <sub>64.3</sub> |
-| <sub>F5&#8209;TTS</sub> | <sub>0.3B</sub> | <sub>2.42</sub> | <sub>66.0</sub> | <sub>1.83</sub> | <sub>67.0</sub> | <sub>1.56</sub> | <sub>76.0</sub> |
-| <sub>ZipVoice</sub> | <sub>0.1B</sub> | <sub>2.05</sub> | <sub>67.4</sub> | <sub>1.70</sub> | <sub>69.7</sub> | <sub>1.40</sub> | <sub>75.1</sub> |
-| <sub>IndexTTS2</sub> | <sub>1.5B</sub> | <sub>2.47</sub> | <sub>70.0</sub> | <sub>2.22</sub> | <sub>70.6</sub> | <sub>1.02</sub> | <sub>76.5</sub> |
-| <sub>CosyVoice&nbsp;3</sub> | <sub>0.5B</sub> | <sub>1.99</sub> | <sub>69.7</sub> | <sub>2.02</sub> | <sub>71.8</sub> | <sub>1.16</sub> | <sub>78.0</sub> |
-| <sub>VoxCPM2</sub> | <sub>2B</sub> | <sub>3.01</sub> | <sub>74.0</sub> | <sub>1.84</sub> | <sub>75.3</sub> | <sub>0.97</sub> | <sub><strong>79.5</strong></sub> |
-| <sub>VibeVoice</sub> | <sub>1.5B</sub> | <sub>–</sub> | <sub>–</sub> | <sub>3.04</sub> | <sub>68.9</sub> | <sub>1.16</sub> | <sub>74.4</sub> |
-| <sub>DiTAR</sub> | <sub>0.6B</sub> | <sub>2.39</sub> | <sub>67.0</sub> | <sub>1.69</sub> | <sub>73.5</sub> | <sub>1.02</sub> | <sub>75.3</sub> |
-| <sub>VibeVoice&#8209;Realtime</sub> | <sub>0.5B</sub> | <sub>2.00</sub> | <sub>69.5</sub> | <sub>2.05</sub> | <sub>63.3</sub> | <sub>–</sub> | <sub>–</sub> |
-| <sub>Pocket&nbsp;TTS</sub> | <sub>0.1B</sub> | <sub><strong>1.59</strong></sub> | <sub>49.1</sub> | <sub><strong>1.63</strong></sub> | <sub>50.7</sub> | <sub>–</sub> | <sub>–</sub> |
-|  |  |  |  |  |  |  |  |
-| <sub><strong>CuteTTS</strong></sub> | <sub>0.2B</sub> | <sub>2.16</sub> | <sub><strong>78.9</strong></sub> | <sub>2.04</sub> | <sub><strong>76.5</strong></sub> | <sub>1.41</sub> | <sub>77.8</sub> |
-| <sub><strong>CuteTTS&#8209;distill</strong></sub> | <sub>0.2B</sub> | <sub>2.41</sub> | <sub>76.8</sub> | <sub>2.03</sub> | <sub>74.2</sub> | <sub>1.47</sub> | <sub>75.6</sub> |
+```bash
+.venv/Scripts/python.exe scripts/evaluate_japanese_cer.py \
+  --model-dir checkpoints/run/inference \
+  --eval-set data/eval/eval_set_v3.json --label v3-trained --device cuda
+
+# **点推定の順位ではなく信頼区間で判断する**
+.venv/Scripts/python.exe scripts/summarize_eval_runs.py --compare v3-base v3-trained
+```
+
+手順の全体と落とし穴は `.claude/skills/cutetts-ja-pipeline/SKILL.md` にまとめてあります。
+
+<br>
+
+## 測定でやってはいけないこと
+
+このforkで実際に誤った結論を出した3件です。
+
+| 欠陥 | 何が起きたか | 対処 |
+|---|---|---|
+| **n=30 の検出力** | 検出限界6.9ptの評価setで2〜3ptの差を比較し、**step数の順位を逆に読んだ** | v3（600文）を使う。`summarize_eval_runs --compare` で信頼区間を出す |
+| **打ち切り生成の混入** | `max_decode_length` 張り付き（停止の失敗）を発音誤りとして数えていた。S0系は0件、S1系は1〜7件で、除外すると差がほぼ消えた | `mean_excluding_truncated` を見る |
+| **数字表記の不一致** | ASRは `1280円` と書くが参照は `千二百八十円`。**正しく読めるほど素のCERは悪化する** | `cer_numeric`（数字正規化CER）を見る |
+
+**flow loss は品質の指標になりません**（3回実証しました）。CERを測ってください。
+
+<br>
+
+## これから
+
+**データ規模ではなく律速要因で段階を切り直しました。**
+19倍のデータで -1.90pt に対し、frontend は学習なしで -11.80pt を出したためです。
+
+| ID | 内容 | 状態 |
+|---|---|---|
+| **J3** | 読み付与 frontend（`pyopenjtalk-plus`） | **次に着手** |
+| J4 | Tokenizer 互換拡張（byte-fallback が1,115種） | J3の結果を見て |
+| **T1** | 学習率の探索（17回すべて `lr=2e-5` 固定だった） | 未実施 |
+| M1 | 抑揚・アクセントの測定 | 並行 |
+| S2 | 1,000時間 | **保留** |
+
+フェーズ定義は [`docs/japanese-training/08-execution-plan.md`](docs/japanese-training/08-execution-plan.md)。
+
+<br>
+
+## ドキュメント
+
+| 文書 | 内容 |
+|---|---|
+| [RESULTS.md](docs/japanese-training/RESULTS.md) | **実測値の一覧**。まずここ |
+| [08-execution-plan.md](docs/japanese-training/08-execution-plan.md) | フェーズ定義とゴール |
+| [07-risks-and-decisions.md](docs/japanese-training/07-risks-and-decisions.md) | リスク（R-001〜R-027）と意思決定（D-001〜D-035） |
+| [README.md](docs/japanese-training/README.md) | プロジェクトの概要 |
+| [01〜06章](docs/japanese-training/) | アーキテクチャ、戦略、データ、学習実装、実験計画、評価計画 |
+| [S0-GATE.md](docs/japanese-training/S0-GATE.md) | S0時点の記録（数値は凍結） |
+
+文書は情報を **確認済み / 決定済み / 提案 / 未確定** の4状態で区別します。
+「実装した」と「日本語学習が成功した」を混同しないための規約です。
+
+<br>
+
+## データとライセンス上の注意
+
+学習データは [`midralab/gol-dataset`](https://huggingface.co/datasets/midralab/gol-dataset) と
+[`ayousanz/moe-speech-plus`](https://huggingface.co/datasets/ayousanz/moe-speech-plus)（どちらも gated）。
+前処理済みの latent は
+[`tts-dataset/cutetts-ja-latents`](https://huggingface.co/datasets/tts-dataset/cutetts-ja-latents)（gated: manual）にあり、
+約2 GBの取得だけで学習を再開できます。**音声そのものは置いていません。**
+
+- **`artifacts/` 配下の音声をコミット・公開してはいけません。**
+  MoeSpeech LICENSE は「音声ファイルを1つであっても公開することは再配布とみなす」と規定しています。
+  生成物も同じ扱いにしてください
+- **話者IDを匿名化として扱わないでください。** gol のIDは `SHA-256(表示名)[:32]` で辞書攻撃が可能です
+- モデルの公開範囲は未確定です（R-009）
+
+<br>
 
 ## Acknowledgements
 
-- [Descript Audio Codec (DAC)](https://github.com/descriptinc/descript-audio-codec) for portions of the Audio VAE implementation
-- [F5-TTS](https://github.com/SWivid/F5-TTS) for the Sway Sampling schedule
-- [Qwen3](https://github.com/QwenLM/Qwen3) model architecture through [Hugging Face Transformers v4.51.0](https://github.com/huggingface/transformers/tree/v4.51.0/src/transformers/models/qwen3).
-
+- [OPPO-Mente-Lab/CuteTTS](https://github.com/OPPO-Mente-Lab/CuteTTS) — 本体
+- [Descript Audio Codec (DAC)](https://github.com/descriptinc/descript-audio-codec) — Audio VAE の一部
+- [F5-TTS](https://github.com/SWivid/F5-TTS) — Sway Sampling
+- [Qwen3](https://github.com/QwenLM/Qwen3) — backbone（[Transformers v4.51.0](https://github.com/huggingface/transformers/tree/v4.51.0/src/transformers/models/qwen3) 経由）
+- [pyopenjtalk-plus](https://github.com/tsukumijima/pyopenjtalk-plus) — 日本語の読み付与
 
 ## License
 
-CuteTTS is released under the Apache License 2.0. Third-party portions retain their respective copyright notices and licenses as described in [NOTICE](NOTICE).
+Apache License 2.0。upstream の著作権表示（Copyright 2026 OPPO and Fudan University）は保持しています。
+このforkが追加した日本語継続学習のコードは Copyright 2026 ayutaz です。
+third-party の部分はそれぞれの著作権表示とライセンスに従います（[NOTICE](NOTICE)）。
