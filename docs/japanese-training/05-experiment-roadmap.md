@@ -1,6 +1,6 @@
 # 段階的な実験ロードマップ
 
-最終更新: 2026-09-01
+最終更新: 2026-09-13
 
 ## 原則
 
@@ -179,7 +179,7 @@ gol 5ゲーム（326時間・215 GB）を vast.ai 上で前処理し、latent ca
 ### 比較実験
 
 - Patch Encoder train vs freeze（[D-005](07-risks-and-decisions.md)。S0はtrainのみ実施）
-- 100%日本語 vs replay混合（D-009）
+- ~~100%日本語 vs replay混合（D-009）~~ → **不要**。D-032で中国語を諦めたため
 - raw/normalized text
 - 必要ならtext + reading
 - full fine-tuning vs部分freeze（S0はfull。16 GBに収まることを確認済み・D-006確定）

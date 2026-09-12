@@ -1,6 +1,6 @@
 # 日本語継続学習の方針
 
-最終更新: 2026-09-01
+最終更新: 2026-09-13
 
 ## 1. 採用する起点
 
@@ -52,14 +52,39 @@ B/CはS1でcatastrophic forgettingを見るablationとして残します（D-005
 | 条件 | S0時点 |
 |---|---|
 | 1 GPUのメモリへ収まらない | **該当せず**（4.15 GB / 16 GB） |
-| full fine-tuningで既存言語やspeaker identityが急激に崩れる | **未測定**。英語・中国語のforgettingはS1で測る |
+| full fine-tuningで既存言語やspeaker identityが急激に崩れる | **測定済み**（2026-09-02）。**英語は無傷**（WER 1.7%、baseと同値）、**中国語は壊滅**（CER 11.5% → 77.2%）。原因は漢字の読みが日本語に上書きされること（[R-022](07-risks-and-decisions.md)）。speaker identity は保たれる（zero-shot 12/12、margin +0.247） |
 | 小規模PoCで更新対象を絞った方が明確に安定する | 該当せず |
 | 複数日本語variantを低コストに管理する必要が生じる | 該当せず |
 
-**bf16単独学習の注意:** 値が1.0付近のパラメータ（LayerNorm weight）は
-更新がbf16の分解能に埋もれて消える。S0では locenc のLayerNorm が
-3000step後も無変化だった。S1で停滞するならfp32 master weightを検討する
-（[04章 §4](04-training-implementation.md)）。
+### bf16単独学習は成立しない（[R-020](07-risks-and-decisions.md)。2026-09-02 確定）
+
+**この節にはS0時点で兆候が書かれていた**（原文）:
+
+> 値が1.0付近のパラメータ（LayerNorm weight）は更新がbf16の分解能に埋もれて消える。
+> S0では locenc のLayerNorm が3000step後も無変化だった。
+> S1で停滞するならfp32 master weightを検討する。
+
+**S1は実際に停滞し、この注記は追われなかった。** 代わりにデータ側を19回疑い、
+クラスタ密度・データ量・step数・moe比率を試して「データ量は効かない」と
+誤った結論に至った。**兆候を記録してあったのに使わなかった。**
+
+実測（`model/CuteTTS/weights/tts/model.safetensors`、lr=2e-5）:
+
+| module | params | dtype | 更新が丸めで消える割合 |
+|---|---:|---|---:|
+| `qwen_backbone` | 126.9M | bf16 | **91.37%** |
+| `locenc` | 31.0M | bf16 | **84.15%** |
+| `head`（DiT） | 70.5M | fp32 | 0.00% |
+
+LayerNorm だけの問題ではなく、**backbone のほぼ全体**が動いていなかった。
+`ParameterDrift` で学習ループ内を測ると、3,000 step 後に動いた標本は
+bf16 で **3.68%**、fp32 で **100%**。
+
+**対策（D-030）**: `promote_to_float32` で学習前に fp32 へ上げ、
+`export_for_inference(dtypes=)` で元のdtypeへ戻す。`--param-dtype float32` が既定。
+**毎runの metrics にある `parameter_moved_ratio` を必ず確認する。**
+
+修正後は base 35.86% → **20.10%**（v3 600文、-15.77pt、有意）。
 
 ## 4. 日本語Tokenizerのdecision gate
 
@@ -173,13 +198,22 @@ Japanese: 90–95%
 original languages: 5–10%
 ```
 
-これは未決定です。判断は最終用途によります。
+**決着した（D-032、2026-09-12）: replayは入れない。100%日本語で進める。**
 
-- 日本語専用性能を最大化するなら100%日本語も候補。
-- 多言語能力を保持するならreplay dataを混ぜる。
-- 公式の元学習データは非公開のため、同一分布を再現できるとは限らない。
+英語・中国語の固定subsetで測った結果（[R-022](07-risks-and-decisions.md)）:
 
-最低限、英語と中国語の固定evaluation subsetを保持し、日本語比率ごとのforgettingを測ってから決めます。
+| checkpoint | 英語 WER | 中国語 CER |
+|---|---:|---:|
+| base | 1.7% | 11.5% |
+| fp32 30,000 step | **1.7%** | **77.2%** |
+
+**英語は replay なしで完全に保たれる。** 壊れるのは中国語だけで、
+原因は忘却ではなく**漢字の読みが日本語に上書きされること**
+（`图书馆` が「としょかん」と読まれ、中国語ASRが「同志觀」と転写する）。
+
+ユーザー判断（2026-09-12）で**日本語特化modelとする**（D-032）。
+中国語能力の回復に投資しないので、**replayの目的が消えた**（D-009は不要）。
+中国語CERは回帰の監視指標としてのみ残す。
 
 ## 7. Audio VAE再学習の条件
 

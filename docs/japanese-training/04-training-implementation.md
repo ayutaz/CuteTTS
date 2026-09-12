@@ -1,6 +1,6 @@
 # 学習コード復元・実装計画
 
-最終更新: 2026-09-01
+最終更新: 2026-09-13
 
 ## 1. 現在の境界
 
@@ -161,17 +161,61 @@ target velocity = P - xi
 | gradient accumulation | なし | 16 GBに収まるため不要 |
 | target duration上限 | 188 patch（約30秒） | |
 | reference duration | 10秒目標（`target_reference_seconds`） | 推論側の30秒想定と実発話長4.55秒の乖離を埋める |
-| mixed precision | bf16（headのみfp32） | checkpointのdtype構成に従う |
+| mixed precision | **fp32 master weights**（`--param-dtype float32`。既定） | **checkpointのdtypeに従うと学習が成立しない**（R-020）。VRAM 10.7 GB、速度 139 → 180 ms/step（+29%） |
 | activation checkpointing | 未使用 | 不要 |
 | flow target copies | 4 | 論文どおり |
 | gradient clipping | 1.0 | |
 | condition dropout | 0.1（speaker + reference、joint） | |
-| 日本語/replay比率 | 100%日本語（replayなし） | D-009はS1で判断 |
+| 日本語/replay比率 | 100%日本語（replayなし） | **確定**。D-032で中国語を諦めたためreplayの目的が消えた（D-009は不要）。英語はreplayなしで保たれる（WER 1.7%） |
 
-**bf16の注意:** 値が1.0付近のパラメータ（LayerNorm weight）は、
-lr×weight_decay 程度の更新がbf16の分解能（相対4e-3）に埋もれて消える。
-S0の実測でも locenc のLayerNorm weight は3000step後も変化がゼロだった。
-S1で学習が停滞する場合、fp32 master weight の導入を検討する。
+### fp32 master weights が必須（[R-020](07-risks-and-decisions.md)。2026-09-02 確定）
+
+**この節の旧版はS0時点で兆候を書いていた**（原文）:
+
+> 値が1.0付近のパラメータ（LayerNorm weight）は、lr×weight_decay 程度の更新が
+> bf16の分解能（相対4e-3）に埋もれて消える。S0の実測でも locenc の
+> LayerNorm weight は3000step後も変化がゼロだった。
+> S1で学習が停滞する場合、fp32 master weight の導入を検討する。
+
+**S1は停滞したが、この注記は追われなかった。** 問題は LayerNorm だけでなく
+**backbone のほぼ全体**だった。
+
+公開checkpointは `qwen_backbone` / `locenc` が bf16。`AdamW` がそれを直接更新すると、
+lr=2e-5 の更新量が bf16 の丸め幅（相対 2^-8 ≈ 0.0039）を下回る。
+`|w| > 0.0103` の重みでは更新が半ULPに満たず、round-to-nearest-even が毎step捨てる。
+**同じ向きに積み上がらないので、何step回しても動かない。**
+
+| module | params | dtype | 更新が消える割合 |
+|---|---:|---|---:|
+| `qwen_backbone` | 126.9M | bf16 | **91.37%** |
+| `locenc` | 31.0M | bf16 | **84.15%** |
+| `head`（DiT） | 70.5M | fp32 | 0.00% |
+
+**dtypeは `--dtype` では変えられない。** `CuteTTSModel.__init__` は
+`model/CuteTTS/config.json` の `architecture.lm_config.torch_dtype` から
+`AutoModel.from_config` 経由で backbone dtype を決め、`model.py:91-96` が
+それを locenc / stop_predictor へ伝播させる。
+
+**実装（D-030）:**
+
+```python
+# scripts/train_continual.py
+export_dtypes = promote_to_float32(model)       # 学習前に fp32 へ上げる
+...
+export_for_inference(out, model=model, dtypes=export_dtypes)   # 元のdtypeへ戻す
+```
+
+`modeling/` は推論専用なので触らない。書き出しは元のdtypeへ戻すので、
+`config.json` との整合とcheckpointサイズは従来のまま。
+3,000 step の累積移動量は `lr × step ≈ 6e-2` で bf16 の丸め幅（`|w|~0.02` で約 8e-5）を
+大きく上回るため、**bf16 へ戻しても学習の成果は失われない**。
+
+**`ParameterDrift` が「重みが実際に動いた標本の割合」を毎runの metrics に残す。**
+3,000 step 後の実測は bf16 で **3.68%**、fp32 で **100%**。
+**この値が100%付近でないrunの比較は無意味。**
+
+修正後は base 35.86% → **20.10%**（評価set v3・600文、-15.77pt、有意）。
+`--param-dtype checkpoint` で旧挙動を再現できる（A/B検証用）。
 
 ## 5. Training sequenceの復元
 

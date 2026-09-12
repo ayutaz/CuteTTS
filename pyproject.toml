@@ -7,7 +7,10 @@ name = "cutetts"
 version = "0.1.0"
 description = "Inference and local web demo for CuteTTS"
 readme = "README.md"
-requires-python = ">=3.10"
+# 3.12 に固定する。torch 2.5.1 の対応は 3.9〜3.12 で、">=3.10" では
+# 3.13 / 3.14 を許してしまい実態と合わない（システム既定の3.14では動かない）。
+# 検証しているのは 3.12 だけなので、そこへ揃える。
+requires-python = ">=3.12,<3.13"
 license = "Apache-2.0"
 license-files = [
   "LICENSE",

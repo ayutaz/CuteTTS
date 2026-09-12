@@ -107,7 +107,7 @@
 - 日本語10〜30時間から段階的に拡大すること
 - VAE/Speaker Encoderをfreezeして始めること
 - full fine-tuningを主案にすること
-- 日本語90〜95% + replay 5〜10%の候補
+- ~~日本語90〜95% + replay 5〜10%の候補~~ → **採らない**。D-032で中国語を諦めたためreplayの目的が消えた。英語はreplayなしで保たれる（R-022）
 - RTX 4090 1台でのPoC可能性、H100 8台の容量計画候補
 - Japanese VAEやdistillationを後段へ回すこと
 

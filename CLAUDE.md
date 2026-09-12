@@ -17,11 +17,12 @@ upstreamのコードは **推論専用** であり、学習コード（trainer /
 
 ## コマンド
 
-セットアップ（Python 3.10+、実際の想定は3.12）:
+セットアップ（**Python 3.12 固定**。`requires-python = ">=3.12,<3.13"`）:
 
 ```bash
 pip install torch==2.5.1 torchaudio==2.5.1  # CUDA 12.1なら --index-url https://download.pytorch.org/whl/cu121
 pip install -e .
+pip install -e ".[ja]"   # J3（読み付与）を使うとき。pyopenjtalk-plus（D-035）
 ```
 
 weightの取得（`model/` は .gitignore 済み）:
@@ -133,7 +134,7 @@ LMのtoken rateは `12.5 / 2 = 6.25 patch/s`。`--max-decode-length 750` は約1
 
 文書は情報を **確認済み / 決定済み / 提案 / 未確定** の4状態で区別する規約がある。
 「実装した」と「日本語学習が成功した」を混同しないこと。
-07章の意思決定表（D-001〜D-031）は項目を削除せず、状態と理由を追記して更新する。
+07章の意思決定表（D-001〜D-035）は項目を削除せず、状態と理由を追記して更新する。
 
 ### 進捗（2026-09-02）
 
@@ -204,7 +205,9 @@ src/cutetts/training/   P1: artifacts, manifest, text_rules, pairing,
                         P2: objectives, collator, dataset, forward,
                             packing, checkpointing, prompt
                         S1: evalstats（対応のある検定・打ち切り勘定）,
-                            reading（漢数字の読み展開 = J2）
+                            reading（漢数字の読み展開 = J2）,
+                            reference（短いreferenceの延長。R-026は棄却済み）,
+                            listening_page（聴取評価ページ）
 scripts/                reproduce_baseline, analyze_japanese_tokenizer,
                         evaluate_japanese_vae, prepare_japanese_manifest,
                         cache_audio_latents, build_voice_clusters,
@@ -254,7 +257,9 @@ S1のデータは [tts-dataset/cutetts-ja-latents](https://huggingface.co/datase
   同じ経路で測る（`scripts/diagnose_flow_loss.py`）。flow loss は
   「常に0を出す予測器」が約2.0なので、それより十分小さいかで絶対値を判断する。
 - **CERには約10%の床がある**。人間の実音声を同じ経路で測ると 10.4%。
-  S0の28.4%を「0%が理想」として読まない。TTS由来は約18pt。
+  現在の 20.10% のうちTTS由来は約9.7pt（S0の28.4%では約18pt）。
+  **CERは会話文では知覚と一致する**（盲検A/Bで13/14、p=0.0009）が、
+  **抑揚とアクセントは測れない**（聴取での指摘は40%と30%）。
 - ~~zero-shot split の話者不足（R-013）~~ → S1前処理で解消（119 cluster）。
 
 ### 未探索の手段（2026-09-10 時点）
@@ -322,9 +327,10 @@ S1のデータは [tts-dataset/cutetts-ja-latents](https://huggingface.co/datase
   **同じ声がtrainとzero-shotに現れる**（実測15話者）。片方の粒度では両立しない。
 - **out_of_domain はデータ量では直らない**（D-026）。golのcorpusで
   数字を含む文は1.3%。S1のゴールから外した。
-- **データはクラスタ密度で選ぶ**（D-029 / R-018）。`PairSampler` はクラスタ内から
-  ref/target を引くので、1クラスタ median 5発話では組み合わせが枯渇する。
-  **305時間より、密なクラスタの17時間のほうが良い**（31.8% vs 30.8%）。
+- ~~データはクラスタ密度で選ぶ（D-029 / R-018）~~ → **差し戻した**（2026-09-02）。
+  根拠の -6.0pt は有意でなく（95%CI [-14.25, +0.05]）、差の約60%が1文の
+  挿入発散によるもので、step数とmoe比率も交絡していた。しかも**すべて
+  backbone凍結下の観測**（R-020）。S2の選定基準は fp32 で測り直してから決める。
 - **CERは必ず測る**（R-015）。flow loss は CER と逆相関することがある。
   20,000 step実行では flow 最良の点で CER が最悪（54.2%）だった。
 
