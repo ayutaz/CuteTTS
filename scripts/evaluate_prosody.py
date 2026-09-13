@@ -28,7 +28,7 @@ CERはASRの転写を見るので、抑揚が平坦でも転写が合えば誤�
 
     python scripts/evaluate_prosody.py \\
       --model-dir checkpoints/s1v2-fp32-30000 \\
-      --eval-set data/eval/prosody_eval_set.json --label trained --device cuda
+      --eval-set data/eval/prosody_eval_set_v2.json --label trained --device cuda
 """
 
 from __future__ import annotations
@@ -72,7 +72,7 @@ def read_audio(path: Path) -> tuple[np.ndarray, int]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="抑揚を測る（M1）")
     parser.add_argument("--model-dir", required=True)
-    parser.add_argument("--eval-set", default="data/eval/prosody_eval_set.json")
+    parser.add_argument("--eval-set", default="data/eval/prosody_eval_set_v2.json")
     parser.add_argument("--label", required=True)
     parser.add_argument("--device", default="auto")
     parser.add_argument("--seed", type=int, default=42)
@@ -97,7 +97,10 @@ def main() -> None:
     payload = json.loads(Path(args.eval_set).read_text(encoding="utf-8"))
     audio_dir = Path(payload.get("audio_dir", "data/eval/asr_floor"))
     items = payload["items"]
-    print(f"{len(items)} 文 / {len({i['speaker'] for i in items})} 話者  device={device}")
+    # **話者は speaker_key（game×speaker）で数える。** golの話者IDは表示名の
+    # SHA-256 なので、game をまたぐと別人でも同じIDになりうる。
+    keys = {i.get("speaker_key") or i["speaker"] for i in items}
+    print(f"{len(items)} 文 / {len(keys)} 話者  device={device}")
 
     model = CuteTTS.from_pretrained(args.model_dir, device=str(device))
     assigner = None
@@ -139,13 +142,15 @@ def main() -> None:
         similarity = contour_similarity(
             human_contour, semitone_contour(track_f0(model_wave, result.sample_rate)))
         # **床を同じ文ごとに測る。** reference は同一話者の**別の文**なので、
-        # 内容を共有しないときの相関になる（全体で中央値 +0.08）。
+        # 内容を共有しないときの相関になる（240文で平均 -0.001 / sd 0.152。
+        # **真の床はほぼゼロ**。n=67 のときの +0.070 はノイズだった）。
         # モデルがこれを有意に上回らなければ、抑揚を再現できていない。
         floor = contour_similarity(
             human_contour,
             semitone_contour(track_f0(reference_wave, reference_rate)))
         rows.append({
             "index": index, "text": text, "speaker": item["speaker"],
+            "speaker_key": item.get("speaker_key") or item["speaker"],
             "group": item.get("group"), "status": "ok",
             "human": vars(human_stats), "model": vars(model_stats),
             "contour_similarity": None if np.isnan(similarity) else float(similarity),
