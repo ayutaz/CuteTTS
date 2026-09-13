@@ -1,0 +1,293 @@
+# Copyright 2026 ayutaz
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""抑揚とアクセントの測定（M1）。
+
+**CERはこれらを測れない。** 聴取で残った指摘は読み間違い45% / **抑揚40%** /
+**アクセント30%** だが、CERはASRの転写を見るので、`箸` を `橋` のアクセントで
+読んでも転写が同じなら誤りにならない。**測る手段が無いと、直ったかどうかを
+判定できない。**
+
+このプロジェクトの失敗はすべて測定の失敗だった（R-012 / R-020 / R-021 / R-029）。
+**T1（lr探索）にGPU費用を払う前に、判定できる指標を用意する。**
+
+## 測るもの
+
+1. **抑揚の幅** — 有声フレームのF0を半音に直したときのばらつき。
+   「棒読み」は幅が小さい。`ProsodyStats.semitone_sd` / `semitone_range`。
+2. **輪郭の一致** — 同一話者・同一文の人間音声と比べたF0輪郭の相関。
+   `contour_similarity`。
+3. **アクセント型** — `pyopenjtalk` が返すアクセント核から、モーラごとの
+   高低パターンを作る。`accent_plan`。
+
+## F0推定器の選定（D-040）
+
+`pyworld`（harvest + stonemask）。調波20本のパルス列で **90〜500Hz を誤差0.01%**、
+無音・白色雑音を正しく無声と判定する。
+
+`torchaudio.functional.detect_pitch_frequency` は**有声/無声を判定しない**
+（全フレームを有声として返す）ので使えない。無音区間のゴミが混ざり、
+3秒の発話で32半音というありえない幅が出た。
+
+    >>> stats = measure(waveform, 24000)
+    >>> stats.semitone_sd > 0
+    True
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+
+import numpy as np
+
+#: F0の解析間隔（ミリ秒）。
+FRAME_PERIOD_MS = 10.0
+
+#: 探索するF0の下限・上限（Hz）。女性の高い声まで含める。
+F0_FLOOR_HZ = 60.0
+F0_CEIL_HZ = 700.0
+
+#: 統計を出すのに要る最小の有声フレーム数。これを下回るとNaNを返す。
+MIN_VOICED_FRAMES = 10
+
+#: 両端から落とすフレーム数。
+#:
+#: `harvest` は**最初と最後のフレームだけ値が壊れる**。一定200Hzの合成音で
+#: 先頭が -1.13半音、末尾が -3.66半音になり、それだけで sd が
+#: 0.00005 → **0.378** に膨らんだ（5〜95パーセンタイル幅は 0.0003 のまま）。
+#: 実音声では端が無音なので普段は無声として落ちるが、**落ちない場合に
+#: すべての測定を膨らませる**ので明示的に捨てる。
+EDGE_FRAMES_DROPPED = 1
+
+#: 小書き仮名。直前のモーラに結合する。
+_SMALL_KANA = frozenset("ャュョァィゥェォヮゃゅょぁぃぅぇぉゎ")
+
+
+@dataclass(frozen=True)
+class ProsodyStats:
+    """1発話の抑揚の統計。
+
+    `semitone_sd` と `semitone_range` は**話者の平均音高に依存しない**
+    （中央値を基準にした半音で測る）ので、男女や話者間で比べられる。
+    """
+
+    seconds: float
+    n_frames: int
+    n_voiced: int
+    voiced_ratio: float
+    median_hz: float
+    semitone_sd: float
+    semitone_range: float
+
+    @property
+    def is_valid(self) -> bool:
+        return self.n_voiced >= MIN_VOICED_FRAMES
+
+
+def track_f0(waveform: np.ndarray, sample_rate: int) -> np.ndarray:
+    """F0の系列（Hz）を返す。**無声フレームは 0**。
+
+    `pyworld` が要る（`[prosody]` extra）。
+    """
+    import pyworld
+
+    samples = np.asarray(waveform, dtype=np.float64)
+    if samples.ndim > 1:                       # (channel, time) も (time, channel) も
+        samples = samples.mean(axis=0 if samples.shape[0] < samples.shape[-1] else 1)
+    if samples.size == 0:
+        return np.zeros(0, dtype=np.float64)
+    coarse, times = pyworld.harvest(
+        samples, sample_rate, f0_floor=F0_FLOOR_HZ, f0_ceil=F0_CEIL_HZ,
+        frame_period=FRAME_PERIOD_MS)
+    f0 = pyworld.stonemask(samples, coarse, times, sample_rate)
+    if f0.size > 2 * EDGE_FRAMES_DROPPED:     # 端の壊れたフレームを無声にする
+        f0[:EDGE_FRAMES_DROPPED] = 0.0
+        f0[-EDGE_FRAMES_DROPPED:] = 0.0
+    return f0
+
+
+def semitone_contour(f0: np.ndarray) -> np.ndarray:
+    """有声フレームだけを、中央値を0とする半音へ直した系列。
+
+    話者の平均音高を落とすので、**別の話者どうしでも比べられる**。
+    """
+    voiced = np.asarray(f0)[np.asarray(f0) > 0]
+    if voiced.size == 0:
+        return np.zeros(0, dtype=np.float64)
+    return 12.0 * np.log2(voiced / np.median(voiced))
+
+
+def measure(waveform: np.ndarray, sample_rate: int) -> ProsodyStats:
+    """1発話の抑揚を測る。"""
+    f0 = track_f0(waveform, sample_rate)
+    samples = np.asarray(waveform)
+    length = samples.shape[-1] if samples.ndim else 0
+    voiced = f0[f0 > 0]
+    if voiced.size < MIN_VOICED_FRAMES:
+        return ProsodyStats(
+            seconds=length / sample_rate, n_frames=int(f0.size),
+            n_voiced=int(voiced.size),
+            voiced_ratio=float(voiced.size / f0.size) if f0.size else 0.0,
+            median_hz=float("nan"), semitone_sd=float("nan"),
+            semitone_range=float("nan"))
+    contour = semitone_contour(f0)
+    low, high = np.percentile(contour, [5, 95])
+    return ProsodyStats(
+        seconds=length / sample_rate,
+        n_frames=int(f0.size),
+        n_voiced=int(voiced.size),
+        voiced_ratio=float(voiced.size / f0.size),
+        median_hz=float(np.median(voiced)),
+        semitone_sd=float(contour.std()),
+        semitone_range=float(high - low),
+    )
+
+
+def resample_contour(contour: np.ndarray, length: int) -> np.ndarray:
+    """輪郭を指定長へ線形補間する。長さの違う2発話を比べるため。"""
+    contour = np.asarray(contour, dtype=np.float64)
+    if contour.size == 0 or length <= 0:
+        return np.zeros(max(length, 0), dtype=np.float64)
+    if contour.size == 1:
+        return np.full(length, contour[0], dtype=np.float64)
+    source = np.linspace(0.0, 1.0, contour.size)
+    target = np.linspace(0.0, 1.0, length)
+    return np.interp(target, source, contour)
+
+
+def contour_similarity(a: np.ndarray, b: np.ndarray) -> float:
+    """2つのF0輪郭（半音）の相関。同一文の別発話どうしで使う。
+
+    **長さは線形に伸縮して揃える。** DTWは使わない。DTWは時間のずれを
+    吸収してしまうが、**間の取り方も抑揚の一部**なので吸収させたくない。
+    その代わり「音高は合っているが話速が違う」ケースも低く出る。
+    **話速の違いを別に見ること**（`ProsodyStats.seconds`）。
+
+    片方が短すぎる（`MIN_VOICED_FRAMES` 未満）ときは NaN。
+    """
+    a = np.asarray(a, dtype=np.float64)
+    b = np.asarray(b, dtype=np.float64)
+    if a.size < MIN_VOICED_FRAMES or b.size < MIN_VOICED_FRAMES:
+        return float("nan")
+    length = max(a.size, b.size)
+    left, right = resample_contour(a, length), resample_contour(b, length)
+    if left.std() == 0 or right.std() == 0:
+        return float("nan")
+    return float(np.corrcoef(left, right)[0, 1])
+
+
+def split_moras(reading: str) -> list[str]:
+    """片仮名の読みをモーラへ分ける。小書き仮名は直前に結合する。
+
+        >>> split_moras("チュウカ")
+        ['チュ', 'ウ', 'カ']
+    """
+    moras: list[str] = []
+    for char in reading:
+        if moras and char in _SMALL_KANA:
+            moras[-1] += char
+        else:
+            moras.append(char)
+    return moras
+
+
+@dataclass(frozen=True)
+class AccentPhrase:
+    """1アクセント句。
+
+    `nucleus` は核の位置（1始まり）。**0 は平板型**（核なし）。
+    """
+
+    moras: tuple[str, ...]
+    nucleus: int
+
+    def pattern(self) -> tuple[bool, ...]:
+        """モーラごとに「高いか」を返す（東京式アクセントの規則）。
+
+        * 平板型（核0）: 1モーラ目が低く、以降すべて高い
+        * 頭高型（核1）: 1モーラ目が高く、以降すべて低い
+        * 中高・尾高（核n>=2）: 1モーラ目が低く、2〜nが高く、以降低い
+
+            >>> AccentPhrase(("ハ", "シ", "ヲ"), 1).pattern()
+            (True, False, False)
+            >>> AccentPhrase(("ハ", "シ", "ヲ"), 2).pattern()
+            (False, True, False)
+            >>> AccentPhrase(("ハ", "シ", "ヲ"), 0).pattern()
+            (False, True, True)
+        """
+        size = len(self.moras)
+        if size == 0:
+            return ()
+        if self.nucleus == 0:
+            return tuple(index > 0 for index in range(size))
+        if self.nucleus == 1:
+            return tuple(index == 0 for index in range(size))
+        return tuple(0 < index < self.nucleus for index in range(size))
+
+
+def accent_plan(text: str) -> list[AccentPhrase]:
+    """文をアクセント句へ分け、それぞれの核の位置を返す。
+
+    `pyopenjtalk` の `chain_flag` が 1 の語は直前のアクセント句に連なる。
+    句の核は**先頭の語の `acc`** を採る（`pyopenjtalk` の規約）。
+    記号は落とす。
+
+    **これは辞書の予測であって実測ではない。** 同形異音（`箸`/`橋`）は
+    文脈で決まるので、辞書が外すことがある。音声側と突き合わせる基準として使う。
+    """
+    import pyopenjtalk
+
+    from cutetts.training.yomi import SKIP_POS
+
+    phrases: list[AccentPhrase] = []
+    moras: list[str] = []
+    nucleus = 0
+    for word in pyopenjtalk.run_frontend(text):
+        if (word.get("pos") or "") in SKIP_POS:
+            continue
+        reading = word.get("read") or ""
+        if not reading:
+            continue
+        starts_phrase = word.get("chain_flag", -1) != 1
+        if starts_phrase and moras:
+            phrases.append(AccentPhrase(tuple(moras), nucleus))
+            moras = []
+        if starts_phrase:
+            nucleus = int(word.get("acc") or 0)
+        moras.extend(split_moras(reading))
+    if moras:
+        phrases.append(AccentPhrase(tuple(moras), nucleus))
+    return phrases
+
+
+def expected_pattern(text: str) -> tuple[bool, ...]:
+    """文全体のモーラ高低パターン（アクセント句を連結したもの）。"""
+    pattern: list[bool] = []
+    for phrase in accent_plan(text):
+        pattern.extend(phrase.pattern())
+    return tuple(pattern)
+
+
+def pattern_agreement(left: tuple[bool, ...], right: tuple[bool, ...]) -> float:
+    """2つの高低パターンの一致率。長さが違えば短い方に合わせて比べる。"""
+    size = min(len(left), len(right))
+    if size == 0:
+        return float("nan")
+    return sum(1 for i in range(size) if left[i] == right[i]) / size
+
+
+def semitones(ratio: float) -> float:
+    """周波数比を半音へ。"""
+    return 12.0 * math.log2(ratio)

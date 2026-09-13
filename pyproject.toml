@@ -52,6 +52,21 @@ dev = [
 ja = [
   "pyopenjtalk-plus>=0.4,<1",
 ]
+# 抑揚・アクセントの測定（M1 / D-040）。**upstreamの推論には不要**。
+# `pip install -e ".[prosody]"` で入る。アクセント側は `[ja]` も要る。
+#
+# pyworld を選んだ理由（実測。D-040 と 07章 M1 に詳細）:
+#   - 調波20本のパルス列で 90〜500Hz を**誤差0.01%**で当てる
+#   - **無声/無音を判定する**（無音 0/101、白色雑音 1/101 フレーム）
+#   - 依存は numpy だけ。Windows wheel があり**ビルド不要**（約1MB）
+#
+# `torchaudio.functional.detect_pitch_frequency` は**使えない**。
+# 有声/無声を判定せず全フレームを有声として返すので、無音区間のゴミが
+# 混ざって3秒の発話で32半音という値になる。
+# `librosa`（pyin）は scipy + numba + llvmlite を引く（約200MB）。
+prosody = [
+  "pyworld>=0.3,<1",
+]
 
 [project.scripts]
 cutetts = "cutetts.cli:main"
