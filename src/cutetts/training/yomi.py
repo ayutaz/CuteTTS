@@ -126,7 +126,15 @@ def reading_form(text: str) -> str:
 
 
 def _load_vocab(model_dir: str | Path) -> frozenset[str]:
-    """checkpointのtokenizerが単独pieceとして持つ文字の集合。"""
+    """checkpointのtokenizerが単独pieceとして持つ文字の集合。
+
+    **これは byte-fallback の近似であって実測ではない。** SentencePiece は
+    NFKC正規化してから照合するので、piece に無くても fallback にならない文字が
+    ある（`…`→`..`×3、`！`→`!`、`？`→`?`、全角数字→半角）。
+    実測すると評価300文のうち**判定が変わるのは2文**（`％`→`パーセント` など）で、
+    記号は `skip_pos` が先に弾くため実害は出ていない（R-030）。
+    厳密に測るなら `sp.encode(surface)` に `<0x..>` が出るかを見ること。
+    """
     import sentencepiece as spm
 
     path = Path(model_dir) / "tokenizer" / "tokenizer.model"
