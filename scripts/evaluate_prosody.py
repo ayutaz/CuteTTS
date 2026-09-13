@@ -131,18 +131,25 @@ def main() -> None:
 
         model_wave = result.waveform.squeeze(0).float().numpy().astype(np.float64)
         human_wave, human_rate = read_audio(audio_dir / item["human_wav"])
+        reference_wave, reference_rate = read_audio(reference)
 
         model_stats = measure(model_wave, result.sample_rate)
         human_stats = measure(human_wave, human_rate)
+        human_contour = semitone_contour(track_f0(human_wave, human_rate))
         similarity = contour_similarity(
-            semitone_contour(track_f0(human_wave, human_rate)),
-            semitone_contour(track_f0(model_wave, result.sample_rate)),
-        )
+            human_contour, semitone_contour(track_f0(model_wave, result.sample_rate)))
+        # **床を同じ文ごとに測る。** reference は同一話者の**別の文**なので、
+        # 内容を共有しないときの相関になる（全体で中央値 +0.08）。
+        # モデルがこれを有意に上回らなければ、抑揚を再現できていない。
+        floor = contour_similarity(
+            human_contour,
+            semitone_contour(track_f0(reference_wave, reference_rate)))
         rows.append({
             "index": index, "text": text, "speaker": item["speaker"],
             "group": item.get("group"), "status": "ok",
             "human": vars(human_stats), "model": vars(model_stats),
             "contour_similarity": None if np.isnan(similarity) else float(similarity),
+            "floor_similarity": None if np.isnan(floor) else float(floor),
             "spoken": None if spoken == text else spoken,
         })
         if saved < args.save_samples:
@@ -178,6 +185,28 @@ def main() -> None:
             if r["model"]["semitone_range"] < r["human"]["semitone_range"]),
     }
 
+    # 床（同一話者・別の文）との対応のある比較。**床を超えていなければ
+    # 「抑揚を再現できた」とは言えない。**
+    paired = [(r["contour_similarity"], r["floor_similarity"]) for r in usable
+              if r["contour_similarity"] is not None
+              and r.get("floor_similarity") is not None]
+    if paired:
+        from cutetts.training.evalstats import paired_compare
+
+        # `difference = mean(b) - mean(a)` なので (床, モデル) の順に渡すと
+        # **正が「床を上回る」**になる。相関は大きいほど良いので、
+        # `better` / `worse` の数え方だけは逆に読むことになる（ここでは使わない）。
+        comparison = paired_compare([f for _, f in paired],
+                                    [s for s, _ in paired])
+        summary["floor_similarity_mean"] = statistics.mean(f for _, f in paired)
+        summary["above_floor"] = {
+            "difference": comparison.difference,
+            "low": comparison.low,
+            "high": comparison.high,
+            "significant": comparison.significant,
+            "n": comparison.n,
+        }
+
     artifacts.write_run_metadata(
         run_dir, phase="prosody",
         command=[Path(sys.argv[0]).name] + sys.argv[1:], seed=args.seed,
@@ -208,6 +237,12 @@ def main() -> None:
         print(f"  輪郭の相関          平均 {summary['contour_similarity_mean']:5.2f}  "
               f"中央値 {summary['contour_similarity_median']:5.2f}")
     print(f"  人間より平坦だった文 {summary['n_flatter_than_human']}/{summary['n']}")
+    if "above_floor" in summary:
+        above = summary["above_floor"]
+        print(f"\n  床（同一話者・別の文）平均 {summary['floor_similarity_mean']:+.3f}")
+        print(f"  床との差 {above['difference']:+.3f} "
+              f"95%CI [{above['low']:+.3f}, {above['high']:+.3f}]  "
+              f"{'**有意に上回る**' if above['significant'] else '**床と区別できない**'}")
     print("\n  **アクセント核の位置は測れていない**（強制アラインメントが要る）")
     print(f"\n完了: {run_dir}")
 
