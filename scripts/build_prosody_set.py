@@ -15,15 +15,27 @@
 """抑揚・アクセント評価（M1）のsetを作る。
 
 **人間の実音声と同一文・同一話者で比べる**ためのペアを作る。
-CERと同じく、この指標にも**人間を基準にした床**が要る。
+CERと同じく、この指標にも人間を基準にした床が要る。
 
-素材は `measure_asr_floor` が抽出済みの gol 原音声（`data/eval/asr_floor/`）。
-80発話 / 11話者がローカルにあり、テキストも揃っている。
+## n を先に決める
 
-**referenceには同一話者の別発話を使う。** 対象発話そのものを渡すと、
-モデルが対象の抑揚を直接聞くことになり、測りたいものが漏れる。
+初回の n=67 では**検出できる最小差が 0.084** で、観測した「床との差
++0.027」はその下にあった（[R-032](../docs/japanese-training/07-risks-and-decisions.md)）。
+**0.05 の差を検出するには n=189 が要る。** 既定は 240（余裕を持たせる）。
 
-    python scripts/build_prosody_set.py --count 60
+## 規約
+
+* **話者は `metadata.tsv` から引く。** ファイル名から推測すると
+  `z0102#00253.wav` 形式で失敗し、game_id で代用して**別話者を同一人物
+  として扱う**（実測で27人が14人に潰れた）。
+* **referenceは話者ごとに1つ固定**（その話者の最長発話）。対象ごとに
+  替えると条件が増える。**対象発話そのものは絶対に使わない**
+  （モデルが対象の抑揚を直接聞くことになる）。
+* **学習manifestと重複させない。** 暗記した発話で抑揚を測ると値が膨らむ。
+  ローカルの6 gameは学習の8 gameと重複していないが、明示的に確認する。
+* **測定の前に凍結する。** 結果を見てから選び直すと、その操作だけで基準線が動く。
+
+    python scripts/build_prosody_set.py --count 240
 """
 
 from __future__ import annotations
@@ -31,59 +43,62 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
+import tarfile
+import unicodedata
 from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from cutetts.training import artifacts  # noqa: E402
+from cutetts.training import artifacts, text_rules  # noqa: E402
+from cutetts.training.manifest import load_manifest  # noqa: E402
 
 #: referenceに使う音声の最短の長さ（秒）。短すぎるとspeaker条件が安定しない。
-MIN_REFERENCE_SECONDS = 2.0
+MIN_REFERENCE_SECONDS = 3.0
+
+#: 対象発話の長さの範囲（秒）。短いとF0のフレームが足りず、
+#: 長すぎると生成に時間がかかる。
+MIN_TARGET_SECONDS = 2.0
+MAX_TARGET_SECONDS = 15.0
+
+#: 1話者から採る対象の上限。少数の話者に偏らせない。
+MAX_PER_SPEAKER = 6
+
+_STRIP = re.compile(r"[\s、。「」『』・…‥！？!?,.\-―ー~〜\"'()（）]")
 
 
-def original_name(wav: str) -> str:
-    """`0926C280_as02_shizuru_0004.wav` → `as02_shizuru_0004.wav`。
+def has_lexical_content(text: str) -> bool:
+    """語彙的内容を持つか。`build_eval_set` と同じ規則。
 
-    `measure_asr_floor` が game_id の先頭8文字を前置して保存している。
+    `ふあぁぁぁ` のような感情表現は抑揚の比較に向かない
+    （読みも抑揚も規則が効かない）。
     """
-    name = Path(wav).name
-    return name.split("_", 1)[1] if "_" in name else name
+    stripped = _STRIP.sub("", unicodedata.normalize("NFKC", text))
+    if len(stripped) < 10:
+        return False
+    if re.search(r"(.)\1{3,}", stripped):
+        return False
+    if len(set(stripped)) / len(stripped) < 0.45:
+        return False
+    return bool(re.search(r"[ァ-ヶ一-龥]", stripped))
 
 
-def load_speakers(metadata_path: str, games: set[str]) -> dict[tuple[str, str], str]:
-    """`(game_id, 元のwav名)` → `speaker_id` を引く。
-
-    **ファイル名から話者を推測してはいけない。** `as02_shizuru_0004.wav` は
-    読めるが `z0102#00253.wav` は読めず、game_id で代用すると
-    **別の話者を同一人物として扱う**（実測で27人が14人に潰れた）。
-    referenceが別話者になると、測りたいものが測れない。
-
-    metadata.tsv は数百万行ある。game_id は先頭32文字に固定長で入るので、
-    **分割する前にそこだけ見て捨てる**。
-    """
-    found: dict[tuple[str, str], str] = {}
-    with Path(metadata_path).open(encoding="utf-8", newline="") as handle:
-        handle.readline()                       # header
-        for line in handle:
-            if line[:32] not in games:
-                continue
-            fields = line.rstrip("\r\n").split("\t")
-            if len(fields) < 5:
-                continue
-            found[(fields[0], Path(fields[3]).name)] = fields[1]
-    return found
+def local_name(game_id: str, speaker_id: str, file_path: str) -> str:
+    """抽出後のファイル名。game と話者が名前から分かるようにする。"""
+    return f"{game_id[:8]}_{speaker_id[:8]}_{Path(file_path).name}"
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="抑揚評価のsetを作る（M1）")
-    parser.add_argument("--floor-metrics",
-                        default="artifacts/asr-floor/2026-08-31T15-49-53/metrics.json")
-    parser.add_argument("--audio-dir", default="data/eval/asr_floor")
     parser.add_argument("--gol-metadata", default="data/raw/gol/metadata.tsv")
-    parser.add_argument("--out", default="data/eval/prosody_eval_set.json")
-    parser.add_argument("--count", type=int, default=60)
+    parser.add_argument("--tar-dir", default="data/raw/gol/tars")
+    parser.add_argument("--train-manifest",
+                        default="data/manifests_s1v2/all_clustered.jsonl")
+    parser.add_argument("--audio-dir", default="data/eval/prosody_audio")
+    parser.add_argument("--out", default="data/eval/prosody_eval_set_v2.json")
+    parser.add_argument("--count", type=int, default=240)
     parser.add_argument("--seed", type=int, default=20260913)
     parser.add_argument("--artifact-root", default="artifacts")
     parser.add_argument("--timestamp")
@@ -95,92 +110,175 @@ def main() -> None:
     run_dir = artifacts.new_run_dir("prosody-evalset", args.artifact_root,
                                     timestamp=args.timestamp)
 
-    payload = json.loads(Path(args.floor_metrics).read_text(encoding="utf-8"))
-    audio_dir = Path(args.audio_dir)
+    tar_dir = Path(args.tar_dir)
+    games = {path.stem for path in tar_dir.glob("*.tar")}
+    if not games:
+        raise SystemExit(f"tar が無い: {tar_dir}")
+    print(f"ローカルtar {len(games)} game")
 
-    games = {str(row.get("game_id")) for row in payload["rows"]}
-    print(f"metadata.tsv から {len(games)} game の話者を引く...")
-    speakers = load_speakers(args.gol_metadata, games)
+    excluded = {record.utterance_id for record in load_manifest(args.train_manifest)}
+    print(f"学習manifest {len(excluded):,} 発話を除外対象として読み込み")
 
-    by_speaker: dict[str, list[dict]] = defaultdict(list)
-    unresolved = 0
-    for row in payload["rows"]:
-        wav = Path(row["wav"]).name
-        if not (audio_dir / wav).is_file():
-            continue
-        speaker = speakers.get((str(row.get("game_id")), original_name(wav)))
-        if speaker is None:
-            unresolved += 1
-            continue
-        by_speaker[speaker].append({
-            "wav": wav, "text": row["text"], "seconds": float(row["seconds"]),
-            "group": row.get("group", "plain"), "game_id": row.get("game_id"),
-        })
-
-    print(f"{sum(len(v) for v in by_speaker.values())} 発話 / {len(by_speaker)} 話者"
-          + (f"（話者を引けなかった発話 {unresolved}）" if unresolved else ""))
-
-    items: list[dict] = []
-    skipped_single = 0
-    for speaker, rows in sorted(by_speaker.items()):
-        if len(rows) < 2:
-            # referenceに使える別発話が無い話者は使えない
-            skipped_single += 1
-            continue
-        usable = [r for r in rows if r["seconds"] >= MIN_REFERENCE_SECONDS]
-        for target in rows:
-            reference = next(
-                (r for r in usable if r["wav"] != target["wav"]), None)
-            if reference is None:
+    by_speaker: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    overlap = 0
+    with Path(args.gol_metadata).open(encoding="utf-8", newline="") as handle:
+        handle.readline()
+        for line in handle:
+            if line[:32] not in games:
                 continue
-            items.append({
-                "text": target["text"],
-                "speaker": speaker,
-                "human_wav": target["wav"],
-                "reference_wav": reference["wav"],
-                "human_seconds": target["seconds"],
-                "reference_seconds": reference["seconds"],
-                "group": target["group"],
+            fields = line.rstrip("\r\n").split("\t")
+            if len(fields) < 5:
+                continue
+            game_id, speaker_id, text, file_path, duration = fields[:5]
+            utterance_id = f"gol:{game_id}:{Path(file_path).name}"
+            if utterance_id in excluded:
+                overlap += 1
+                continue
+            try:
+                seconds = float(duration)
+            except ValueError:
+                continue
+            # **話者は (game, speaker) で括る。** golの話者IDは表示名の
+            # SHA-256 なので、同名キャラが別作品にいると同じIDになる
+            # （別の声優かもしれない）。game をまたいで reference を選ぶと
+            # **別の声を基準にして抑揚を測る**ことになる。
+            by_speaker[(game_id, speaker_id)].append({
+                "game_id": game_id, "speaker_id": speaker_id, "text": text.strip(),
+                "file_path": file_path, "seconds": seconds,
             })
 
-    def key(item: dict) -> str:
-        return hashlib.sha256(
-            f"{args.seed}:{item['human_wav']}".encode("utf-8")).hexdigest()
+    print(f"{sum(len(v) for v in by_speaker.values()):,} 発話 / {len(by_speaker)} 話者"
+          f"（学習と重複して除外 {overlap}）")
 
-    items.sort(key=key)
+    def usable_target(row: dict) -> bool:
+        if not (MIN_TARGET_SECONDS <= row["seconds"] <= MAX_TARGET_SECONDS):
+            return False
+        text = row["text"]
+        if text_rules.is_punctuation_only(text) or text_rules.contains_markup(text):
+            return False
+        if text_rules.has_name_placeholder(text):
+            return False
+        return has_lexical_content(text)
+
+    items: list[dict] = []
+    for (game_id, speaker_id), rows in sorted(by_speaker.items()):
+        if len(rows) < 2:
+            continue
+        # referenceは話者ごとに1つ固定（最長発話）。対象からは必ず外す。
+        reference = max(rows, key=lambda r: r["seconds"])
+        if reference["seconds"] < MIN_REFERENCE_SECONDS:
+            continue
+        candidates = [r for r in rows
+                      if r["file_path"] != reference["file_path"] and usable_target(r)]
+
+        def key(row: dict) -> str:
+            return hashlib.sha256(
+                f"{args.seed}:{row['file_path']}".encode("utf-8")).hexdigest()
+
+        for target in sorted(candidates, key=key)[:MAX_PER_SPEAKER]:
+            items.append({
+                "text": target["text"],
+                "speaker": speaker_id,
+                # **話者の同一性は (game, speaker) で決まる。** 話者IDだけで
+                # 括ると、同名キャラの別作品を同一人物として数えてしまう
+                # （実測で 77 → 85 に増えた）。集計はこちらで行う。
+                "speaker_key": f"{game_id[:8]}:{speaker_id[:8]}",
+                "game_id": target["game_id"],
+                "human_wav": local_name(target["game_id"], speaker_id,
+                                        target["file_path"]),
+                "reference_wav": local_name(reference["game_id"], speaker_id,
+                                            reference["file_path"]),
+                "human_seconds": target["seconds"],
+                "reference_seconds": reference["seconds"],
+                "_target_path": target["file_path"],
+                "_reference_path": reference["file_path"],
+            })
+
+    def item_key(item: dict) -> str:
+        return hashlib.sha256(
+            f"{args.seed}:{item['_target_path']}".encode("utf-8")).hexdigest()
+
+    items.sort(key=item_key)
     picked = items[:args.count]
+    if len(picked) < args.count:
+        print(f"**候補が {len(picked)} 件しかない**（要求 {args.count}）")
+
+    wanted: dict[str, set[str]] = defaultdict(set)
+    for item in picked:
+        # **抽出元のtarは path 自身の game で決める。** item の game を
+        # 使うと、別gameの reference を対象のtarから探して取りこぼす。
+        wanted[item["_target_path"][:32]].add(item["_target_path"])
+        wanted[item["_reference_path"][:32]].add(item["_reference_path"])
+    print(f"{len(picked)} 文 / {len({i['speaker_key'] for i in picked})} 話者 → "
+          f"音声 {sum(len(v) for v in wanted.values())} 本を抽出")
+
+    audio_dir = Path(args.audio_dir)
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    extracted = 0
+    for game_id, paths in sorted(wanted.items()):
+        # tar内は game_id を除いた相対path
+        inside = {path.split("/", 1)[1] if "/" in path else path: path
+                  for path in paths}
+        with tarfile.open(tar_dir / f"{game_id}.tar") as archive:
+            for member in archive:
+                if member.name not in inside:
+                    continue
+                source = archive.extractfile(member)
+                if source is None:
+                    continue
+                speaker = Path(inside[member.name]).parent.name
+                target = audio_dir / local_name(game_id, speaker, member.name)
+                target.write_bytes(source.read())
+                extracted += 1
+        print(f"  {game_id[:8]} … {extracted} 本")
+
+    missing = [item for item in picked
+               if not (audio_dir / item["human_wav"]).is_file()
+               or not (audio_dir / item["reference_wav"]).is_file()]
+    if missing:
+        raise SystemExit(f"抽出できなかった音声が {len(missing)} 件ある")
+
+    for item in picked:                     # 内部用のpathは残さない
+        item.pop("_target_path", None)
+        item.pop("_reference_path", None)
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({
-        "version": 1,
+        "version": 2,
         "seed": args.seed,
         "created_for": "M1 / 抑揚とアクセントの測定",
         "audio_dir": str(audio_dir),
         "note": (
             "人間の実音声と同一文・同一話者で比べるためのset。"
-            "**referenceは同一話者の別発話**（対象発話を渡すと抑揚が漏れる）。"
-            "結果を見てから変更しないこと。"
+            "**referenceは話者ごとに1つ固定した別発話**（対象発話を渡すと抑揚が漏れる）。"
+            "学習manifestとは game 単位で重複しない。"
+            "n は検出力から決めた（n=67 では検出限界 0.084 で判定できなかった。R-032）。"
+            "**結果を見てから変更しないこと。**"
         ),
         "items": picked,
     }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
-    speakers = {i["speaker"] for i in picked}
-    print(f"{len(picked)} 文 / {len(speakers)} 話者")
-    if skipped_single:
-        print(f"発話が1件しかなく使えなかった話者: {skipped_single}")
-    for item in picked[:4]:
-        print(f"  {item['speaker']:10s} {item['text'][:30]}")
-        print(f"    対象 {item['human_wav']}  ref {item['reference_wav']}")
+    speakers = {item["speaker_key"] for item in picked}
+    print(f"\n{len(picked)} 文 / {len(speakers)} 話者")
+    counts = defaultdict(int)
+    for item in picked:
+        counts[item["speaker_key"]] += 1
+    print(f"1話者あたり {min(counts.values())}〜{max(counts.values())} 文")
+    for item in picked[:3]:
+        print(f"  {item['speaker'][:8]} {item['human_seconds']:5.2f}s  {item['text'][:32]}")
+        print(f"    ref {item['reference_wav']}  ({item['reference_seconds']:.1f}s)")
 
     artifacts.write_run_metadata(
         run_dir, phase="prosody-evalset",
         command=[Path(sys.argv[0]).name] + sys.argv[1:], seed=args.seed,
-        inputs={"floor_metrics": args.floor_metrics, "audio_dir": str(audio_dir)},
+        inputs={"gol_metadata": args.gol_metadata, "tar_dir": str(tar_dir),
+                "train_manifest": args.train_manifest},
     )
     artifacts.write_metrics(run_dir, {
         "phase": "prosody-evalset", "count": len(picked),
-        "speakers": len(speakers), "output": str(out),
+        "speakers": len(speakers), "extracted_audio": extracted,
+        "train_overlap_excluded": overlap, "output": str(out),
         "sha256": artifacts.file_checksum(out),
     })
     print(f"\n完了: {out}  sha256 {artifacts.file_checksum(out)[:16]}...")
