@@ -253,6 +253,32 @@ def test_measure_reports_a_sweep_as_wide():
     assert stats.semitone_sd > 2.0
 
 
+@pytest.mark.parametrize("hz", [95.0, 110.0, 130.0])
+def test_low_voice_is_not_reported_an_octave_up(hz):
+    """**倍音に乗らないこと。** これが R-033 の再発防止。
+
+    広い範囲（65〜700Hz）を一度に探すと、男声（約110Hz）を **392Hz**
+    と報告した（3.5倍）。実音声でも8件中2件が 3.3〜3.8倍になり、
+    「抑揚の幅20半音」という不自然な値の正体だった。
+    """
+    from cutetts.training.prosody import track_f0
+
+    f0 = track_f0(harmonic_tone(hz, harmonics=30), SAMPLE_RATE)
+    voiced = f0[f0 > 0]
+
+    assert voiced.size > 20
+    assert abs(float(np.median(voiced)) - hz) / hz < 0.05
+
+
+def test_center_estimate_stops_at_the_harmonic_jump():
+    """中心の推定は、倍音へ跳んだところで止まる。"""
+    from cutetts.training.prosody import estimate_center_hz
+
+    center = estimate_center_hz(harmonic_tone(110.0, harmonics=30), SAMPLE_RATE)
+
+    assert abs(center - 110.0) / 110.0 < 0.05
+
+
 def test_measure_of_silence_is_invalid():
     """無声しかない発話は NaN を返し、**0 とは区別する**。"""
     from cutetts.training.prosody import measure

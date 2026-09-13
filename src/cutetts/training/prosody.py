@@ -40,6 +40,13 @@
 （全フレームを有声として返す）ので使えない。無音区間のゴミが混ざり、
 3秒の発話で32半音というありえない幅が出た。
 
+**ただし `pyworld` にも罠がある（R-033）。** 広い範囲（55〜700Hz）を一度に
+探すと**倍音に乗る**。実測で男声（約110Hz）を **392Hz** と報告し、
+実音声8件中2件が 3.3〜3.8倍（537.6 / 586.6Hz）になった。
+`track_f0` は中心を先に求めてから狭い範囲で推定し直す。
+**倍音に乗ったフレームを整数倍で引き戻す方式は棄却した** — どの係数を
+選ぶかが中心の推定誤差に強く依存し、実測で 185Hz を 292Hz にしてしまった。
+
     >>> stats = measure(waveform, 24000)
     >>> stats.semitone_sd > 0
     True
@@ -56,8 +63,30 @@ import numpy as np
 FRAME_PERIOD_MS = 10.0
 
 #: 探索するF0の下限・上限（Hz）。女性の高い声まで含める。
-F0_FLOOR_HZ = 60.0
+#:
+#: 下限を 55Hz まで下げると、**白色雑音に 55〜60Hz の偽の周期**を見つける
+#: （実測で 8/101 フレームが有声になった）。人の声で 65Hz を下回るのは稀。
+F0_FLOOR_HZ = 65.0
 F0_CEIL_HZ = 700.0
+
+#: 上限を段階的に上げて倍音誤りを見つけるための梯子（Hz）。
+#:
+#: **広い範囲を一度に探すと倍音に乗る。** 実測で、男声（約110Hz）を
+#: 上限700Hzで探すと **392Hz**（約3.5倍）と報告した。実音声でも8件中2件が
+#: 3.3〜3.8倍の誤りを出した（537.6Hz / 586.6Hz）。
+#: **抑揚の幅が20半音（1.7オクターブ）という不自然な値は、この誤りだった。**
+F0_CEIL_LADDER = (250.0, 350.0, 500.0, 700.0)
+
+#: 梯子を上る際、中央値がこの倍率以上に跳んだら倍音誤りと見なす。
+#:
+#: 上限による切り詰めが解けるときの上がり方は 1.6倍程度（実測 173.6→273.6）、
+#: 倍音誤りは 3.3〜3.8倍（実測）。その間に閾値を置く。
+F0_OCTAVE_RATIO = 1.8
+
+#: 最終パスで中央値の何倍まで許すか。話者のF0が動く幅を覆いつつ、
+#: 3倍（倍音が出る位置）には届かせない。1.9 / 2.2 / 2.6 で中央値は
+#: ほぼ変わらず（実測7件で差は最大 6Hz）、有声率が最も高い 2.2 を採った。
+F0_SPAN = 2.2
 
 #: 統計を出すのに要る最小の有声フレーム数。これを下回るとNaNを返す。
 MIN_VOICED_FRAMES = 10
@@ -96,22 +125,68 @@ class ProsodyStats:
         return self.n_voiced >= MIN_VOICED_FRAMES
 
 
+def _harvest(samples: np.ndarray, sample_rate: int,
+             floor: float, ceil: float) -> np.ndarray:
+    import pyworld
+
+    coarse, times = pyworld.harvest(
+        samples, sample_rate, f0_floor=floor, f0_ceil=ceil,
+        frame_period=FRAME_PERIOD_MS)
+    return pyworld.stonemask(samples, coarse, times, sample_rate)
+
+
+def estimate_center_hz(samples: np.ndarray, sample_rate: int) -> float:
+    """話者のF0の中心（中央値）を、**倍音に乗らずに**求める。
+
+    上限を `F0_CEIL_LADDER` の順に上げ、中央値が `F0_OCTAVE_RATIO` 倍以上
+    跳んだところで止める。跳びは倍音誤り、緩やかな上昇は切り詰めが
+    解けただけ、と読み分ける。判定できなければ NaN。
+    """
+    center = float("nan")
+    for ceil in F0_CEIL_LADDER:
+        f0 = _harvest(samples, sample_rate, F0_FLOOR_HZ, ceil)
+        voiced = f0[f0 > 0]
+        if voiced.size < MIN_VOICED_FRAMES:
+            continue
+        median = float(np.median(voiced))
+        if center != center:                   # 最初の有効な推定
+            center = median
+            continue
+        if median / center >= F0_OCTAVE_RATIO:  # 倍音へ乗った
+            break
+        center = median
+    return center
+
+
 def track_f0(waveform: np.ndarray, sample_rate: int) -> np.ndarray:
     """F0の系列（Hz）を返す。**無声フレームは 0**。
 
+    **2段階で推定する。** 先に話者のF0の中心を倍音に乗らずに求め
+    （`estimate_center_hz`）、その周り `F0_SPAN` 倍の範囲で本番を推定する。
+    一度に広い範囲を探すと倍音に乗る（`F0_CEIL_LADDER` 参照）。
+    `F0_SPAN` は 1.9 / 2.2 / 2.6 で中央値がほぼ変わらないことを実測して選んだ。
+
     `pyworld` が要る（`[prosody]` extra）。
     """
-    import pyworld
-
     samples = np.asarray(waveform, dtype=np.float64)
     if samples.ndim > 1:                       # (channel, time) も (time, channel) も
         samples = samples.mean(axis=0 if samples.shape[0] < samples.shape[-1] else 1)
     if samples.size == 0:
         return np.zeros(0, dtype=np.float64)
-    coarse, times = pyworld.harvest(
-        samples, sample_rate, f0_floor=F0_FLOOR_HZ, f0_ceil=F0_CEIL_HZ,
-        frame_period=FRAME_PERIOD_MS)
-    f0 = pyworld.stonemask(samples, coarse, times, sample_rate)
+
+    # **有声/無声の判定は広い範囲のパスから取る。** 狭い範囲だけで探すと、
+    # 白色雑音のような非周期信号にも「その帯域での周期」を見つけてしまう
+    # （実測で 1/101 → 62/101 フレームが有声になった）。
+    wide = _harvest(samples, sample_rate, F0_FLOOR_HZ, F0_CEIL_HZ)
+    center = estimate_center_hz(samples, sample_rate)
+    if center != center:
+        f0 = np.zeros_like(wide)
+    else:
+        f0 = _harvest(samples, sample_rate,
+                      max(F0_FLOOR_HZ, center / F0_SPAN),
+                      min(F0_CEIL_HZ, center * F0_SPAN))
+        size = min(f0.size, wide.size)
+        f0 = f0[:size] * (wide[:size] > 0)     # 広域パスで無声なら無声
     if f0.size > 2 * EDGE_FRAMES_DROPPED:     # 端の壊れたフレームを無声にする
         f0[:EDGE_FRAMES_DROPPED] = 0.0
         f0[-EDGE_FRAMES_DROPPED:] = 0.0
@@ -291,3 +366,66 @@ def pattern_agreement(left: tuple[bool, ...], right: tuple[bool, ...]) -> float:
 def semitones(ratio: float) -> float:
     """周波数比を半音へ。"""
     return 12.0 * math.log2(ratio)
+
+
+#: アクセント核と見なすF0の下がり幅（半音）。
+#:
+#: これ未満なら平板（核なし）と判定する。**`pyopenjtalk` の合成音
+#: （辞書どおりのアクセントを持つ）で一致率が最大になる値を選ぶ。**
+NUCLEUS_DROP_SEMITONES = 2.0
+
+
+def mora_pitches(f0, spans) -> list[float]:
+    """モーラごとのF0中央値（Hz）。無声のモーラは NaN。
+
+    `spans` は `cutetts.training.alignment.MoraAligner.align` の返り値。
+    F0は `FRAME_PERIOD_MS` 間隔なので、区間をフレーム番号へ直して切り出す。
+    """
+    values: list[float] = []
+    frames_per_second = 1000.0 / FRAME_PERIOD_MS
+    array = np.asarray(f0)
+    for span in spans:
+        low = int(span.start * frames_per_second)
+        high = max(int(span.end * frames_per_second), low + 1)
+        window = array[low:high]
+        voiced = window[window > 0]
+        values.append(float(np.median(voiced)) if voiced.size else float("nan"))
+    return values
+
+
+def observed_nucleus(pitches, *, threshold: float = NUCLEUS_DROP_SEMITONES) -> int:
+    """1アクセント句のF0列から、核の位置を読む。**0は平板**。
+
+    核は「そのモーラの**後で**F0が落ちる」位置なので、隣り合うモーラの
+    差が最大の場所を採る。落差が `threshold` 未満なら平板とする。
+
+    無声のモーラ（NaN）は飛ばして、その前後で比べる。
+    全部無声なら判定できないので -1 を返す。
+
+        >>> observed_nucleus([200.0, 100.0, 100.0])   # 頭高
+        1
+        >>> observed_nucleus([100.0, 200.0, 100.0])   # 中高
+        2
+        >>> observed_nucleus([100.0, 105.0, 110.0])   # 平板
+        0
+    """
+    usable = [(index, value) for index, value in enumerate(pitches)
+              if value == value and value > 0]
+    if len(usable) < 2:
+        return -1
+    best_drop = 0.0
+    best_index = 0
+    for (left_index, left), (_, right) in zip(usable, usable[1:]):
+        drop = semitones(left / right)
+        if drop > best_drop:
+            best_drop = drop
+            best_index = left_index + 1        # 1始まり
+    return best_index if best_drop >= threshold else 0
+
+
+def nucleus_agreement(expected, observed) -> float | None:
+    """核の位置の一致率。判定できなかった句（-1）は分母から除く。"""
+    pairs = [(e, o) for e, o in zip(expected, observed) if o >= 0]
+    if not pairs:
+        return None
+    return sum(1 for e, o in pairs if e == o) / len(pairs)
