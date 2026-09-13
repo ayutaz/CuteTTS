@@ -50,6 +50,24 @@ from pathlib import Path
 #: （`――` や `…` が読点に化ける）。
 SKIP_POS = frozenset({"記号", "フィラー", "その他"})
 
+#: 読みを平仮名で書くか。**False**（既定は `pyopenjtalk` が返す片仮名のまま）。
+#:
+#: 学習コーパスは平仮名が主（manifest全文で片仮名は仮名の3.4%）なので、
+#: 片仮名は分布から外れて不利ではないかと考え、300文で対照実験した。
+#: **支持されなかった。**
+#:
+#: | 条件 | 素CER | 対 J3なし |
+#: |---|---:|---|
+#: | J3なし | 25.86% | — |
+#: | **片仮名** | **23.22%** | **-2.64pt**（有意） |
+#: | 平仮名 | 23.73% | -2.13pt（有意） |
+#:
+#: 片仮名 → 平仮名は +0.51pt、95%CI [-0.82, +1.83] で**有意差なし**。
+#: 悪化した文数も80で同じだった。**表記は効かない。**
+#: token数が同じ（`キレイ` も `きれい` も4 piece、fallbackなし）ことと整合する。
+#: 測定値が良い片仮名を既定にし、切り替えは残す。
+USE_HIRAGANA = False
+
 #: 置換する語の最小長。**1**（1文字語も置換する）。
 #:
 #: 当初は「`一` `生` のような多音字を壊しうる」として2にしたが、実測すると
@@ -59,6 +77,52 @@ SKIP_POS = frozenset({"記号", "フィラー", "その他"})
 #: 30万文のうち3,000文で測ると、置換が起きる文は 24.2% → 25.9% と
 #: 1.7pt しか増えない。**再現率の利得が誤爆のコストを上回る。**
 MIN_SURFACE_LENGTH = 1
+
+
+def to_hiragana(text: str) -> str:
+    """片仮名を平仮名にする。長音符 `ー` などはそのまま残す。"""
+    return "".join(
+        chr(ord(c) - 0x60) if 0x30A1 <= ord(c) <= 0x30F6 else c for c in text)
+
+
+#: 読み比較で落とす文字（句読点・記号・空白）。
+#: `evaluate_japanese_cer.normalize` と揃えてある。
+_PUNCT_FOR_READING = frozenset(
+    "、。「」『』・…‥！？!?,.-―ー~〜"
+    + chr(0x22) + chr(0x27) + "()（）"
+    + chr(0x20) + chr(0x3000) + chr(0x09) + chr(0x0A)
+)
+
+
+def reading_form(text: str) -> str:
+    """文を**読み**（平仮名）へ正規化する。表記の違いを消すための比較用。
+
+    仮名で入力すると **ASR も仮名で書き戻す**ので、漢字の参照文に対する
+    素のCERは「発音は正しいのに表記が違う」を誤りと数える（R-029）。
+    両辺をこの形にしてから比べると、その分が落ちる。
+
+        >>> reading_form("楓寺の御先様")
+        'かえでてらのごさきさま'
+        >>> reading_form("カエデテラの御先様")
+        'かえでてらのごさきさま'
+
+    **これは万能ではない。** 同音異義（`聞く` / `効く`）の誤りは見えなくなる。
+    素のCERと**併記する**こと。長音は `read` のまま残す（`pron` は
+    仮名入力と漢字入力で長音化が食い違い、別の欠陥を持ち込む:
+    `王様`→`オーサマ` に対し `おうさま`→`オウサマ`）。
+    """
+    import pyopenjtalk
+
+    words = pyopenjtalk.run_frontend(text)
+    if not words:
+        return ""
+    parts = []
+    for word in words:
+        if (word.get("pos") or "") in SKIP_POS:
+            continue                       # 記号の `read` は `、` なので落とす
+        parts.append(word.get("read") or word.get("string") or "")
+    return "".join(
+        c for c in to_hiragana("".join(parts)) if c not in _PUNCT_FOR_READING)
 
 
 def _load_vocab(model_dir: str | Path) -> frozenset[str]:
@@ -84,6 +148,7 @@ class ReadingAssigner:
     vocab: frozenset[str]
     skip_pos: frozenset[str] = SKIP_POS
     min_length: int = MIN_SURFACE_LENGTH
+    hiragana: bool = USE_HIRAGANA
     _replaced: list[tuple[str, str]] = field(default_factory=list, repr=False)
 
     @classmethod
@@ -116,6 +181,8 @@ class ReadingAssigner:
             surface = word.get("string") or ""
             reading = word.get("read") or ""
             if surface and reading and self.needs_reading(surface, word.get("pos") or ""):
+                if self.hiragana:
+                    reading = to_hiragana(reading)
                 parts.append(reading)
                 self._replaced.append((surface, reading))
             else:

@@ -40,7 +40,7 @@ import torchaudio
 from cutetts import CuteTTS
 from cutetts.training import artifacts
 from cutetts.training.reading import expand_kanji_numerals, to_arabic_numerals
-from cutetts.training.yomi import ReadingAssigner
+from cutetts.training.yomi import ReadingAssigner, reading_form
 
 ASR_MODEL = "kotoba-tech/kotoba-whisper-v2.0"
 _PUNCT = re.compile(r"[\s、。「」『』・…‥！？!?,.\-―ー~〜\"'()（）]")
@@ -48,6 +48,23 @@ _PUNCT = re.compile(r"[\s、。「」『』・…‥！？!?,.\-―ー~〜\"'()�
 
 def normalize(text: str) -> str:
     return _PUNCT.sub("", unicodedata.normalize("NFKC", text))
+
+
+def reading_cer(reference: str, hypothesis: str) -> float | None:
+    """**読み**に直してから測るCER（R-029）。
+
+    仮名で入力すると ASR も仮名で書き戻すので、漢字の参照文に対する素のCERは
+    「発音は正しいのに表記が違う」を誤りと数える。J3 の評価300文では
+    悪化とされた80文のうち **24文がこれ**だった。
+
+    同音異義の誤りは見えなくなるので、**素のCERと併記する**。
+    `pyopenjtalk` が要る（`[ja]` extra）。入っていなければ None。
+    """
+    try:
+        ref, hyp = reading_form(reference), reading_form(hypothesis)
+    except ImportError:
+        return None
+    return cer(ref, hyp) if ref else None
 
 
 def cer(reference: str, hypothesis: str) -> float | None:
@@ -152,10 +169,13 @@ def main() -> None:
             # 書くが、参照は `千二百八十円`。正しく読めているほど素のCERは
             # 上がってしまい、J2（読み展開）の効果が測れない。
             numeric = cer(to_arabic_numerals(text), to_arabic_numerals(hypothesis))
+            # **表記に依存しないCERも残す。** 仮名で入力すると ASR も仮名で
+            # 書き戻すので、素のCERは正しい発音を誤りと数える（R-029）。
+            reading = reading_cer(text, hypothesis)
             rows.append({
                 "subset": subset, "index": index, "text": text,
                 "hypothesis": hypothesis, "cer": value,
-                "cer_numeric": numeric,
+                "cer_numeric": numeric, "cer_reading": reading,
                 "spoken": None if spoken == text else spoken,
                 "seconds": waveform.shape[-1] / result.sample_rate, "status": "ok",
             })
@@ -172,6 +192,9 @@ def main() -> None:
         numeric = [r["cer_numeric"] for r in rows
                    if r["subset"] == subset and r.get("status") == "ok"
                    and r.get("cer_numeric") is not None]
+        reading = [r["cer_reading"] for r in rows
+                   if r["subset"] == subset and r.get("status") == "ok"
+                   and r.get("cer_reading") is not None]
         if not values:
             summary[subset] = {"n": 0}
             continue
@@ -180,6 +203,8 @@ def main() -> None:
             "n": len(values),
             "cer_numeric_mean": statistics.mean(numeric) if numeric else None,
             "cer_numeric_median": statistics.median(numeric) if numeric else None,
+            "cer_reading_mean": statistics.mean(reading) if reading else None,
+            "cer_reading_median": statistics.median(reading) if reading else None,
             "cer_mean": statistics.mean(values),
             "cer_median": statistics.median(values),
             "cer_p90": values_sorted[int(len(values) * 0.9) - 1] if len(values) >= 10 else None,
@@ -209,8 +234,12 @@ def main() -> None:
     print("\n=== subset別 CER ===")
     for subset, stats in summary.items():
         if stats.get("n"):
-            print(f"  {subset:14s} n={stats['n']:3d}  "
-                  f"mean={stats['cer_mean']*100:5.1f}%  median={stats['cer_median']*100:5.1f}%")
+            line = (f"  {subset:14s} n={stats['n']:3d}  "
+                    f"mean={stats['cer_mean']*100:5.1f}%  "
+                    f"median={stats['cer_median']*100:5.1f}%")
+            if stats.get("cer_reading_mean") is not None:
+                line += f"  読み={stats['cer_reading_mean']*100:5.1f}%"
+            print(line)
     print(f"\n完了: {run_dir}")
 
 

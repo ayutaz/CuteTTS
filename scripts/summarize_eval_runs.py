@@ -64,6 +64,52 @@ def load_runs(artifact_root: Path, subset: str) -> dict[str, list[dict]]:
     return {label: rows for label, (_, rows) in found.items()}
 
 
+def use_reading_cer(runs: dict[str, list[dict]]) -> dict[str, list[dict]]:
+    """`cer` を読みレベルの値へ差し替えた行を返す（元の行は変えない）。
+
+    素のCERはASRの表記選択を誤りと数える（R-029）。仮名を入力に含む比較
+    （J2 / J3）はこちらで見る。保存済みの `cer_reading` があればそれを使い、
+    無ければ転写から計算する（`pyopenjtalk` が要る）。
+    """
+    import unicodedata
+
+    from cutetts.training.yomi import reading_form
+
+    cache: dict[str, str] = {}
+
+    def form(text: str) -> str:
+        if text not in cache:
+            cache[text] = reading_form(unicodedata.normalize("NFKC", text))
+        return cache[text]
+
+    def distance(a: str, b: str) -> int:
+        row = list(range(len(b) + 1))
+        for i, x in enumerate(a, 1):
+            previous, row[0] = row[0], i
+            for j, y in enumerate(b, 1):
+                current = row[j]
+                row[j] = min(row[j] + 1, row[j - 1] + 1, previous + (x != y))
+                previous = current
+        return row[len(b)]
+
+    out: dict[str, list[dict]] = {}
+    for label, rows in runs.items():
+        converted = []
+        for row in rows:
+            value = row.get("cer_reading")
+            if value is None and row.get("hypothesis") is not None:
+                reference = form(str(row.get("text", "")))
+                if reference:
+                    value = distance(
+                        reference, form(str(row["hypothesis"]))) / len(reference)
+            if value is None:
+                continue
+            converted.append({**row, "cer": value})
+        if converted:
+            out[label] = converted
+    return out
+
+
 def print_table(runs: dict[str, list[dict]], *, max_decode_length: int) -> None:
     summaries = [
         summarize(rows, label=label, max_decode_length=max_decode_length)
@@ -107,6 +153,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="CER実行の横断集計と検定")
     parser.add_argument("--artifact-root", default="artifacts", type=Path)
     parser.add_argument("--subset", default="in_domain")
+    parser.add_argument("--metric", choices=("cer", "cer_reading"), default="cer",
+                        help="cer_reading は表記の違いを落として読みで測る（R-029）。"
+                             "仮名を入力に含む比較（J2 / J3）はこちら")
     parser.add_argument("--max-decode-length", type=int, default=400)
     parser.add_argument("--compare", nargs=2, metavar=("A", "B"),
                         help="2実行を対応のある形で比較する")
@@ -116,6 +165,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     runs = load_runs(args.artifact_root, args.subset)
+    if args.metric == "cer_reading":
+        runs = use_reading_cer(runs)
+        print("指標: 読みCER（表記の違いを落としてある。R-029）\n")
     if not runs:
         raise SystemExit(f"{args.artifact_root} に {args.subset} の行が無い")
     if args.compare:

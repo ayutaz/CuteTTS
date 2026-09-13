@@ -31,7 +31,10 @@ import pytest
 from cutetts.training.yomi import (
     MIN_SURFACE_LENGTH,
     SKIP_POS,
+    USE_HIRAGANA,
     ReadingAssigner,
+    reading_form,
+    to_hiragana,
 )
 
 # checkpoint の tokenizer を模した語彙。
@@ -95,6 +98,28 @@ def test_min_length_can_be_raised(assigner):
     assert strict.needs_reading("中華", "名詞") is True
 
 
+def test_default_is_katakana():
+    """既定は `pyopenjtalk` の素の出力（片仮名）。
+
+    「学習コーパスは平仮名が主なので平仮名が有利」という仮説を300文で
+    対照実験したが、**+0.51pt / 95%CI [-0.82, +1.83] で有意差なし**だった（D-037）。
+    測定値が良い片仮名を既定にしてある。
+    """
+    assert USE_HIRAGANA is False
+
+
+def test_to_hiragana_converts_only_katakana():
+    """長音符・漢字・平仮名・記号は素通しする。"""
+    assert to_hiragana("チュウカ") == "ちゅうか"
+    assert to_hiragana("コーヒー") == "こーひー"
+    assert to_hiragana("中華、はい") == "中華、はい"
+
+
+def test_to_hiragana_keeps_small_kana():
+    """拗音・促音（`ッ` `ャ`）も対応する平仮名になる。"""
+    assert to_hiragana("キャッチ") == "きゃっち"
+
+
 def test_missing_tokenizer_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
         ReadingAssigner.from_model_dir(tmp_path)
@@ -133,6 +158,13 @@ def test_apply_leaves_ordinary_sentences_unchanged(assigner):
     assert assigner.replaced == []
 
 
+def test_apply_can_write_hiragana():
+    """切り替えは残してある（既定ではない）。"""
+    assigner = ReadingAssigner(vocab=VOCAB, hiragana=True)
+
+    assert "ちゅうか" in assigner.apply("中華ですね")
+
+
 def test_apply_records_what_it_replaced(assigner):
     assigner.apply("中華ですね")
 
@@ -154,3 +186,37 @@ def test_apply_is_deterministic(assigner):
 
 def test_empty_text_is_returned_as_is(assigner):
     assert assigner.apply("") == ""
+
+
+# ---- 読みレベルの比較形（R-029） ----
+
+
+def test_reading_form_erases_notation_difference():
+    """仮名で書いても漢字で書いても同じ形になる。
+
+    **これが無いと J3 の効果を測れない。** 仮名を入力すると ASR も仮名で
+    書き戻すので、漢字の参照文に対する素のCERは正しい発音を誤りと数える。
+    """
+    assert reading_form("綺麗さっぱり") == reading_form("キレイさっぱり")
+    assert reading_form("痺れるような") == reading_form("しびれるような")
+
+
+def test_reading_form_keeps_genuine_reading_errors():
+    """**読み自体が違えば違う形のまま**。表記の違いだけを消す。
+
+    `楓寺` を `カエデジ` と読むのは実際の誤読で、これを一致にしてしまうと
+    測定器として使えない。
+    """
+    assert reading_form("楓寺の御先様") != reading_form("カエデジの御先様")
+
+
+def test_reading_form_drops_punctuation():
+    assert reading_form("こんにちは、東京") == reading_form("こんにちは東京")
+
+
+def test_reading_form_is_hiragana():
+    assert reading_form("中華") == "ちゅうか"
+
+
+def test_reading_form_of_empty_text_is_empty():
+    assert reading_form("") == ""

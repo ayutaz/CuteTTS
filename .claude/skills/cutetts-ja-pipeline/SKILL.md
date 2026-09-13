@@ -22,8 +22,14 @@ P0/P1/S0/S1 スクリプトを実際に完走させるためのリファレン�
    差は必ず `scripts/summarize_eval_runs.py --compare A B` で信頼区間を出す。
 3. **CERの読み方を間違えない。** 素のCERは
    (a) 打ち切り生成を発音誤りとして数え（R-021）、
-   (b) `1280円` と `千二百八十円` を不一致とする（R-023）。
-   打ち切りは `mean_excluding_truncated`、数詞は `cer_numeric` を見る。
+   (b) `1280円` と `千二百八十円` を不一致とし（R-023）、
+   (c) **ASRが選んだ表記の違いを誤りと数える**（R-029。`なにも` と話しても
+   ASRは `何も` と書く）。
+   打ち切りは `mean_excluding_truncated`、**表記は `cer_reading`（読みCER）** を見る。
+   読みCERは数字も吸収するので `cer_numeric` を包含する。
+   **仮名を入力に含む比較（J2 / J3）は必ず読みCERで見ること。**
+   `summarize_eval_runs.py --metric cer_reading --compare A B`。
+   人間の実音声の床すら 10.42% → **5.59%** と半分近くが表記だった。
 
 ### 現在の最良checkpoint
 
@@ -54,7 +60,7 @@ uv pip install --python .venv/Scripts/python.exe torch==2.5.1 torchaudio==2.5.1 
 uv pip install --python .venv/Scripts/python.exe -e .
 uv pip install --python .venv/Scripts/python.exe pytest pyyaml triton-windows
 
-# J3（読み付与）を使うとき。**upstream推論には不要なので core には入っていない**
+# J3（読み付与）と読みCER（R-029）に要る。**upstream推論には不要なので core には入っていない**
 uv pip install --python .venv/Scripts/python.exe -e ".[ja]"
 ```
 
@@ -280,8 +286,9 @@ yes | vastai destroy instance <id>
 | **2〜3ptの差で方針を決めてしまう** | v2（30文）の検出限界は6.9pt。**step数の順位を取り違えた実績がある**。v3（600文）を使い、`summarize_eval_runs.py --compare` で信頼区間を出す |
 | **打ち切り生成をCERに数えてしまう** | `max_decode_length`（400 patch = 64.0秒）張り付きは停止の失敗で、発音誤りではない。S0系は0件、S1系は1〜7件あり、除外すると差がほぼ消えた（R-021）。`mean_excluding_truncated` を見る |
 | **数詞のCERが改善を隠す** | ASRは `1280円` と書くが参照は `千二百八十円`。**正しく読めるほど素のCERは悪化する**（R-023）。`cer_numeric`（数字正規化CER）を見る。J2の効果は素のCERで +3.1pt、正規化CERで -11.80pt と符号が逆になる |
+| **仮名を入力すると素のCERが悪化する** | 仮名で入力すると **ASRも仮名で書き戻す**ので、漢字の参照文に対する素のCERは発音が正しくても誤りと数える（R-029）。J3の効果は素CERで -2.64pt、**読みCERで -4.23pt**。悪化とされた80文のうち**24文はこれ**だった。`--metric cer_reading` を使う |
 | **dev flow の分離を過適合と読む** | 30,000 step で dev-zero-shot flow は base より悪化するが、CERは改善し話者追随も保たれた。**flow lossは品質の指標にならない**（R-015の3例目） |
-| 誤読が直らない | 主因は byte-fallback。`華` は単独pieceを持たず3つのバイト断片になる（R-027）。仮名に置き換えると直る（`中華`→`ちゅうか`、`湊`→`みなと`）。J3で機械化する |
+| 誤読が直らない | 主因は byte-fallback。`華` は単独pieceを持たず3つのバイト断片になる（R-027）。**J3（`--assign-yomi` / `synthesize_japanese.py` は既定で有効）が機械化済み**。読みCERで -4.23pt [-5.44, -3.05]。作品固有名（`藤宮高邦`）は一般語辞書では直らない |
 | 中国語が壊れている | **仕様**。日本語学習で漢字の読みが上書きされ、CER 11.5% → 77.2%（R-022）。D-032で日本語特化と決定。英語は無傷（WER 1.7%）。中国語CERは回帰の監視指標としてのみ使う |
 | **交絡を確かめずに因果と判断する** | 6点が reference長で完全分離したので原因と考えたが、**対象文の長さと r=0.947 で交絡**しており直接検証も一貫しなかった（R-026は棄却）。完全分離は交絡を確かめるまで証拠にならない |
 
