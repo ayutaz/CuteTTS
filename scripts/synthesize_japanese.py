@@ -26,6 +26,10 @@
 
   既定で有効。数詞を含まない文には何もしないので常時掛けてよい
   （in_domain 600文で悪化しないことを確認済み）。無効にするには `--raw-text`。
+* **語の読み付与（J3 / D-034）** — byte-fallback を含む語を読みへ置き換える。
+  `華` は単独pieceを持たず3断片になり、モデルが読みを引けない（R-027）。
+  `中華`→`チュウカ`、`湊`→`ミナト`。**再学習を要しない。** `--no-yomi` で無効。
+  読みは `pyopenjtalk-plus`（D-035）。`pip install -e ".[ja]"` が要る。
 * **短いreferenceの延長（R-026）** — 3〜4秒のreferenceでは声質と抑揚が崩れる。
   同一話者・同一文で人間と聴き比べると、劣る側の最大3.9秒 < 近い側の最小8.2秒で
   境界が重ならなかった。学習時は平均9.61秒。既定の下限は8秒で、
@@ -50,6 +54,7 @@ import soundfile as sf  # noqa: E402
 
 from cutetts import CuteTTS  # noqa: E402
 from cutetts.training.reading import expand_kanji_numerals  # noqa: E402
+from cutetts.training.yomi import ReadingAssigner  # noqa: E402
 from cutetts.training.reference import (  # noqa: E402
     DEFAULT_MINIMUM_SECONDS,
     duration_seconds,
@@ -72,7 +77,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-decode-length", type=int, default=400,
                         help="400 patch = 64.0秒。張り付くと停止に失敗している（R-021）")
     parser.add_argument("--raw-text", action="store_true",
-                        help="読み展開を行わない。素のtextをそのまま渡す")
+                        help="text前処理（J2の読み展開・J3の読み付与）を行わない")
+    parser.add_argument("--no-yomi", action="store_true",
+                        help="J3（語の読み付与）だけ無効にする。J2は残す")
     parser.add_argument("--min-reference-seconds", type=float,
                         default=DEFAULT_MINIMUM_SECONDS,
                         help="referenceがこれより短ければ繰り返して伸ばす（R-026）。"
@@ -83,9 +90,19 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
 
-    spoken = args.text if args.raw_text else expand_kanji_numerals(args.text)
+    spoken = args.text
+    if not args.raw_text:
+        spoken = expand_kanji_numerals(spoken)          # J2: 漢数字 → 読み
+        if not args.no_yomi:
+            # J3: byte-fallback を含む語を読みへ（R-027）。
+            # 語彙はこのcheckpointの tokenizer から読む
+            assigner = ReadingAssigner.from_model_dir(args.model_dir)
+            spoken = assigner.apply(spoken)
+            if assigner.replaced:
+                print("読み付与: " + "  ".join(
+                    f"{s}→{r}" for s, r in assigner.replaced))
     if spoken != args.text:
-        print(f"読み展開: {args.text}\n        → {spoken}")
+        print(f"入力: {args.text}\n  → {spoken}")
 
     # **短いreferenceは伸ばす。** 同一話者・同一文で人間と聴き比べると、
     # 3〜4秒のreferenceでは声質と抑揚が崩れた（R-026）。学習時は平均9.61秒。

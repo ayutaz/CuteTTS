@@ -40,6 +40,7 @@ import torchaudio
 from cutetts import CuteTTS
 from cutetts.training import artifacts
 from cutetts.training.reading import expand_kanji_numerals, to_arabic_numerals
+from cutetts.training.yomi import ReadingAssigner
 
 ASR_MODEL = "kotoba-tech/kotoba-whisper-v2.0"
 _PUNCT = re.compile(r"[\s、。「」『』・…‥！？!?,.\-―ー~〜\"'()（）]")
@@ -96,6 +97,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-decode-length", type=int, default=400)
     parser.add_argument("--label", default="baseline", help="artifactに残す識別名")
+    parser.add_argument("--assign-yomi", action="store_true",
+                        help="生成前に byte-fallback を含む語を読みへ置き換える"
+                             "（J3 / D-034）。CERは元のtextに対して測る")
     parser.add_argument("--expand-numerals", action="store_true",
                         help="生成前に漢数字を読み（仮名）へ展開する（J2 / D-008）。CERは元のtextに対して測るので、比較はそのまま成立する")
     parser.add_argument("--save-samples", type=int, default=6,
@@ -115,6 +119,8 @@ def main() -> None:
     payload = json.loads(Path(args.eval_set).read_text(encoding="utf-8"))
     model = CuteTTS.from_pretrained(args.model_dir, device=str(device))
     asr = Transcriber(device)
+    # J3 は tokenizer の語彙を見るので、評価対象の checkpoint から読む
+    yomi = ReadingAssigner.from_model_dir(args.model_dir) if args.assign_yomi else None
     print(f"model: {args.model_dir} (variant={model.variant})")
     print(f"eval set: {args.eval_set}  checksum {artifacts.file_checksum(args.eval_set)[:16]}...")
 
@@ -126,6 +132,8 @@ def main() -> None:
             # **CERは元のtextに対して測る。** 展開するのは生成への入力だけなので、
             # 展開なしの実行とそのまま比較できる。
             spoken = expand_kanji_numerals(text) if args.expand_numerals else text
+            if yomi is not None:
+                spoken = yomi.apply(spoken)
             try:
                 result = model.generate(
                     spoken, mode=args.mode,
