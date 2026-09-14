@@ -158,6 +158,54 @@ def estimate_center_hz(samples: np.ndarray, sample_rate: int) -> float:
     return center
 
 
+#: 局所のオクターブ跳びを直すときに見る窓（フレーム数、前後合わせて）。
+#: 10ms刻みなので 41 フレームは約0.4秒＝3〜4モーラ分。
+LOCAL_WINDOW_FRAMES = 41
+
+#: 局所中央値からこれ以上離れたフレームを、跳びの候補とする（半音）。
+#: 1オクターブ（12半音）より手前、通常の抑揚（±6半音程度）より外に置く。
+LOCAL_JUMP_SEMITONES = 7.0
+
+
+def correct_local_jumps(f0: np.ndarray) -> np.ndarray:
+    """**隣と比べて2倍・1/2倍に飛んだフレーム**を引き戻す。
+
+    `track_f0` の中心は発話全体で1つなので、その窓の中に収まってしまう
+    跳びは捕まらない。実測で、隣が約100Hzのところに **207Hz**（ちょうど2倍）
+    が出て、モーラ単位のアクセント判定を壊していた。
+
+    局所中央値から `LOCAL_JUMP_SEMITONES` 以上離れたフレームについて、
+    2倍・1/2倍・3倍・1/3倍を試し、局所中央値に最も近づく候補を採る。
+    どれも近づかなければそのまま残す（本物の抑揚かもしれない）。
+    """
+    values = np.array(f0, dtype=np.float64, copy=True)
+    voiced = np.flatnonzero(values > 0)
+    if voiced.size < 3:
+        return values
+    half = LOCAL_WINDOW_FRAMES // 2
+    for index in voiced:
+        low = max(0, index - half)
+        high = min(values.size, index + half + 1)
+        window = values[low:high]
+        neighbours = window[(window > 0)]
+        if neighbours.size < 3:
+            continue
+        local = float(np.median(neighbours))
+        if local <= 0:
+            continue
+        distance = abs(semitones(values[index] / local))
+        if distance < LOCAL_JUMP_SEMITONES:
+            continue
+        best, best_distance = values[index], distance
+        for factor in (2.0, 0.5, 3.0, 1.0 / 3.0):
+            candidate = values[index] / factor
+            moved = abs(semitones(candidate / local))
+            if moved < best_distance:
+                best, best_distance = candidate, moved
+        values[index] = best
+    return values
+
+
 def track_f0(waveform: np.ndarray, sample_rate: int) -> np.ndarray:
     """F0の系列（Hz）を返す。**無声フレームは 0**。
 
@@ -187,6 +235,7 @@ def track_f0(waveform: np.ndarray, sample_rate: int) -> np.ndarray:
                       min(F0_CEIL_HZ, center * F0_SPAN))
         size = min(f0.size, wide.size)
         f0 = f0[:size] * (wide[:size] > 0)     # 広域パスで無声なら無声
+        f0 = correct_local_jumps(f0)           # 隣と比べた2倍・1/2倍を直す
     if f0.size > 2 * EDGE_FRAMES_DROPPED:     # 端の壊れたフレームを無声にする
         f0[:EDGE_FRAMES_DROPPED] = 0.0
         f0[-EDGE_FRAMES_DROPPED:] = 0.0
@@ -368,11 +417,16 @@ def semitones(ratio: float) -> float:
     return 12.0 * math.log2(ratio)
 
 
-#: アクセント核と見なすF0の下がり幅（半音）。
+#: 核の後で下がったと見なす最小の落差（半音）。
 #:
-#: これ未満なら平板（核なし）と判定する。**`pyopenjtalk` の合成音
-#: （辞書どおりのアクセントを持つ）で一致率が最大になる値を選ぶ。**
-NUCLEUS_DROP_SEMITONES = 2.0
+#: **人間の実音声982句で、辞書との一致率が最大になる値を選んだ**（R-034）。
+NUCLEUS_DROP_SEMITONES = 0.5
+
+#: 核を探す前にF0を平滑化するモーラ数（一様移動平均）。
+#:
+#: 平滑しないと 42.5%、一様3で **46.1%**（人間982句、辞書との一致率）。
+#: 短い句では峰を鈍らせる副作用があるが、全体では上回る。
+NUCLEUS_SMOOTH_MORAS = 3
 
 
 def mora_pitches(f0, spans) -> list[float]:
@@ -393,34 +447,44 @@ def mora_pitches(f0, spans) -> list[float]:
     return values
 
 
-def observed_nucleus(pitches, *, threshold: float = NUCLEUS_DROP_SEMITONES) -> int:
-    """1アクセント句のF0列から、核の位置を読む。**0は平板**。
+def observed_nucleus(pitches, *, threshold: float = NUCLEUS_DROP_SEMITONES,
+                     smooth: int = NUCLEUS_SMOOTH_MORAS) -> int:
+    """1アクセント句のF0列から、核の位置を読む。**0は「句の中で下がらない」**。
 
-    核は「そのモーラの**後で**F0が落ちる」位置なので、隣り合うモーラの
-    差が最大の場所を採る。落差が `threshold` 未満なら平板とする。
+    **核は「F0が最も高いモーラ」。** 峰が末尾なら句の中では下がらない
+    （平板か尾高。句の内部では区別できない）。峰の後の最小値との差が
+    `threshold` 未満なら、下がっていないと見なす。
 
-    無声のモーラ（NaN）は飛ばして、その前後で比べる。
-    全部無声なら判定できないので -1 を返す。
+    無声のモーラ（NaN）は飛ばす。2つ未満しか残らなければ -1（判定不能）。
 
-        >>> observed_nucleus([200.0, 100.0, 100.0])   # 頭高
+    **「隣り合うモーラの落差が最大の位置」ではない。** その規則は人間の
+    実音声982句で 34.0% しか当たらず、**固定回答（常に0）の 36.8% に負けた**。
+    峰を採ると 46.1% へ上がる（R-034）。日本語のアクセント核は
+    「最後に高いモーラ」であって「最も急に下がる位置」ではない。
+
+        >>> observed_nucleus([200.0, 100.0, 100.0])         # 頭高
         1
-        >>> observed_nucleus([100.0, 200.0, 100.0])   # 中高
-        2
-        >>> observed_nucleus([100.0, 105.0, 110.0])   # 平板
+        >>> observed_nucleus([100.0, 105.0, 110.0])         # 下がらない
         0
+        >>> observed_nucleus([float("nan")])                # 判定できない
+        -1
     """
     usable = [(index, value) for index, value in enumerate(pitches)
               if value == value and value > 0]
     if len(usable) < 2:
         return -1
-    best_drop = 0.0
-    best_index = 0
-    for (left_index, left), (_, right) in zip(usable, usable[1:]):
-        drop = semitones(left / right)
-        if drop > best_drop:
-            best_drop = drop
-            best_index = left_index + 1        # 1始まり
-    return best_index if best_drop >= threshold else 0
+    values = np.array([value for _, value in usable], dtype=np.float64)
+    if smooth > 1:
+        kernel = np.ones(smooth, dtype=np.float64)
+        weight = np.convolve(np.ones_like(values), kernel, mode="same")
+        values = np.convolve(values, kernel, mode="same") / weight
+    position = int(np.argmax(values))
+    if position == len(usable) - 1:            # 峰が末尾＝句の中で下がらない
+        return 0
+    after = float(values[position + 1:].min())
+    if semitones(float(values[position]) / after) < threshold:
+        return 0
+    return usable[position][0] + 1             # 1始まり
 
 
 def nucleus_agreement(expected, observed) -> float | None:

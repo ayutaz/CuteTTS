@@ -22,9 +22,15 @@ CERはASRの転写を見るので、抑揚が平坦でも転写が合えば誤�
 * **抑揚の幅**（`semitone_range`）— 「棒読み」は小さい
 * **輪郭の一致**（`contour_similarity`）— 人間と同じ上下をしているか
 
-**アクセント核の位置は測れていない。** モーラ単位の強制アラインメントが
-要るため。`cutetts.training.prosody.accent_plan` で辞書側の予測は取れるので、
-アラインメントを入れれば繋がる。**指摘30%はまだ測れない**ことを明記しておく。
+* **アクセント核の位置**（`observed_nucleus`）— `箸` と `橋` を読み分けているか
+
+アクセントは **モーラ単位の強制アラインメント**（`MMS_FA`）で音声とテキストを
+対応付けてから測る。基準は2つ置く。
+
+* **辞書**（`pyopenjtalk` の full-context label）との一致率。測定器が信号を
+  拾えているかの確認。人間の実音声で **46.1%**（固定回答36.8% / 当てずっぽう25.1%）
+* **人間の実音声**との一致率。**こちらが本来見たい値。** モデルが人間と
+  同じところで下げているか。辞書が正しいかどうかに依存しない
 
     python scripts/evaluate_prosody.py \\
       --model-dir checkpoints/s1v2-fp32-30000 \\
@@ -47,9 +53,12 @@ import torch  # noqa: E402
 
 from cutetts import CuteTTS  # noqa: E402
 from cutetts.training import artifacts  # noqa: E402
+from cutetts.training.alignment import MoraAligner, phrase_plan  # noqa: E402
 from cutetts.training.prosody import (  # noqa: E402
     contour_similarity,
     measure,
+    mora_pitches,
+    observed_nucleus,
     semitone_contour,
     track_f0,
 )
@@ -69,6 +78,41 @@ def read_audio(path: Path) -> tuple[np.ndarray, int]:
     return samples, sample_rate
 
 
+def _rate(hits: int, total: int) -> dict:
+    """一致率と分母をまとめる。"""
+    return {"rate": (hits / total) if total else None, "n": total}
+
+
+def _nuclei(aligner, text, waveform, sample_rate):
+    """アクセント句ごとの核の位置を読む。失敗したら空リスト。"""
+    if aligner is None:
+        return []
+    phrases = phrase_plan(text)
+    spans = aligner.align(waveform, sample_rate, text)
+    if len(spans) != sum(len(p.moras) for p in phrases):
+        return []
+    pitches = mora_pitches(track_f0(waveform, sample_rate), spans)
+    out = []
+    offset = 0
+    for phrase in phrases:
+        size = len(phrase.moras)
+        out.append(observed_nucleus(pitches[offset:offset + size]))
+        offset += size
+    return out
+
+
+def _accent(aligner, text, human_wave, human_rate, model_wave, model_rate):
+    """辞書・人間・モデルの核を並べて返す。"""
+    if aligner is None:
+        return {}
+    expected = [p.internal_nucleus for p in phrase_plan(text)]
+    human = _nuclei(aligner, text, human_wave, human_rate)
+    model = _nuclei(aligner, text, model_wave, model_rate)
+    if len(human) != len(expected) or len(model) != len(expected):
+        return {"accent": None}
+    return {"accent": {"expected": expected, "human": human, "model": model}}
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="抑揚を測る（M1）")
     parser.add_argument("--model-dir", required=True)
@@ -81,6 +125,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="J2（漢数字の読み展開）を掛けてから合成する")
     parser.add_argument("--assign-yomi", action="store_true",
                         help="J3（語の読み付与）を掛けてから合成する")
+    parser.add_argument("--no-accent", action="store_true",
+                        help="アクセント核の測定を行わない（強制アラインメントを"
+                             "省く）。初回は 1.18 GB のモデルを取得する")
     parser.add_argument("--save-samples", type=int, default=0,
                         help="生成音声を残す件数。**artifacts配下の音声は公開しない**")
     parser.add_argument("--artifact-root", default="artifacts")
@@ -108,6 +155,11 @@ def main() -> None:
         from cutetts.training.yomi import ReadingAssigner
 
         assigner = ReadingAssigner.from_model_dir(args.model_dir)
+
+    aligner = None
+    if not args.no_accent:
+        # アラインメントのモデルは初回のみ 1.18 GB を取得する
+        aligner = MoraAligner(device=str(device))
 
     samples_dir = run_dir / "samples"
     if args.save_samples:
@@ -148,6 +200,8 @@ def main() -> None:
         floor = contour_similarity(
             human_contour,
             semitone_contour(track_f0(reference_wave, reference_rate)))
+        accent = _accent(aligner, text, human_wave, human_rate,
+                         model_wave, result.sample_rate)
         rows.append({
             "index": index, "text": text, "speaker": item["speaker"],
             "speaker_key": item.get("speaker_key") or item["speaker"],
@@ -156,6 +210,7 @@ def main() -> None:
             "contour_similarity": None if np.isnan(similarity) else float(similarity),
             "floor_similarity": None if np.isnan(floor) else float(floor),
             "spoken": None if spoken == text else spoken,
+            **accent,
         })
         if saved < args.save_samples:
             sf.write(samples_dir / f"{index:03d}.wav",
@@ -189,6 +244,38 @@ def main() -> None:
             1 for r in usable
             if r["model"]["semitone_range"] < r["human"]["semitone_range"]),
     }
+
+    # --- アクセント核 ---
+    phrases = [r["accent"] for r in rows if r.get("accent")]
+    if phrases:
+        def agree(left_key: str, right_key: str) -> tuple[int, int]:
+            hits = total = 0
+            for entry in phrases:
+                for left, right in zip(entry[left_key], entry[right_key]):
+                    if left < 0 or right < 0:   # 判定できなかった句は除く
+                        continue
+                    total += 1
+                    hits += left == right
+            return hits, total
+
+        counts: dict[int, int] = {}
+        for entry in phrases:
+            for value in entry["human"]:
+                if value >= 0:
+                    counts[value] = counts.get(value, 0) + 1
+        marginal = sum(counts.values())
+        summary["accent"] = {
+            "n_utterances": len(phrases),
+            "n_phrases": sum(len(e["expected"]) for e in phrases),
+            # **本来見たいのはこれ。** 辞書が正しいかに依存しない
+            "model_vs_human": _rate(*agree("human", "model")),
+            "human_vs_dictionary": _rate(*agree("expected", "human")),
+            "model_vs_dictionary": _rate(*agree("expected", "model")),
+            # 人間の核の分布から計算した当てずっぽうの水準
+            "chance": (sum((c / marginal) ** 2 for c in counts.values())
+                       if marginal else None),
+            "constant": (max(counts.values()) / marginal) if marginal else None,
+        }
 
     # 床（同一話者・別の文）との対応のある比較。**床を超えていなければ
     # 「抑揚を再現できた」とは言えない。**
@@ -248,7 +335,21 @@ def main() -> None:
         print(f"  床との差 {above['difference']:+.3f} "
               f"95%CI [{above['low']:+.3f}, {above['high']:+.3f}]  "
               f"{'**有意に上回る**' if above['significant'] else '**床と区別できない**'}")
-    print("\n  **アクセント核の位置は測れていない**（強制アラインメントが要る）")
+    accent = summary.get("accent")
+    if accent:
+        print("\n=== アクセント核 ===")
+        print(f"  {accent['n_utterances']} 発話 / {accent['n_phrases']} アクセント句")
+        for key, label in (("model_vs_human", "**モデル 対 人間**"),
+                           ("human_vs_dictionary", "人間 対 辞書"),
+                           ("model_vs_dictionary", "モデル 対 辞書")):
+            entry = accent[key]
+            if entry["rate"] is None:
+                continue
+            print(f"  {label:18s} {entry['rate']:6.1%}  (n={entry['n']})")
+        print(f"  当てずっぽう {accent['chance']:6.1%}   "
+              f"固定回答 {accent['constant']:6.1%}")
+    else:
+        print("\n  アクセント核は測っていない（--no-accent）")
     print(f"\n完了: {run_dir}")
 
 

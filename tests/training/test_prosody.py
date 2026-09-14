@@ -279,6 +279,74 @@ def test_center_estimate_stops_at_the_harmonic_jump():
     assert abs(center - 110.0) / 110.0 < 0.05
 
 
+def test_nucleus_is_the_peak_not_the_steepest_drop():
+    """**核は「最後に高いモーラ」であって「最も急に下がる位置」ではない。**
+
+    落差最大の規則は人間の実音声982句で 34.0% しか当たらず、
+    **固定回答（常に0）の 36.8% に負けた**。峰を採ると 46.1%（R-034）。
+
+    この列は峰（2モーラ目）と落差最大（3→4モーラ目）が食い違う。
+    """
+    from cutetts.training.prosody import observed_nucleus
+
+    assert observed_nucleus([100.0, 150.0, 148.0, 90.0]) == 2
+
+
+def test_nucleus_is_zero_when_the_peak_is_last():
+    """峰が末尾なら句の中では下がらない（平板か尾高。内部では区別できない）。"""
+    from cutetts.training.prosody import observed_nucleus
+
+    assert observed_nucleus([100.0, 110.0, 120.0, 130.0]) == 0
+
+
+def test_nucleus_needs_a_real_drop():
+    """峰の後がほとんど下がらなければ、下がっていないと見なす。"""
+    from cutetts.training.prosody import observed_nucleus
+
+    assert observed_nucleus([100.0, 101.0, 100.5, 100.2]) == 0
+
+
+def test_nucleus_skips_unvoiced_moras():
+    """無声のモーラ（NaN）は飛ばし、**位置は元の番号で返す**。
+
+    ここでは元の index 4 が峰なので 5 を返す（無声の 1 は数に入るが
+    計算からは外れる）。
+    """
+    from cutetts.training.prosody import observed_nucleus
+
+    nan = float("nan")
+
+    assert observed_nucleus([90.0, nan, 95.0, 220.0, 230.0, 100.0, 92.0]) == 5
+
+
+def test_smoothing_can_shift_the_peak_on_short_phrases():
+    """**平滑化の副作用を明示しておく。**
+
+    3モーラ程度の句では移動平均が峰を隣へ寄せることがある。
+    それでも人間982句では平滑あり 46.1% / 無し 42.5% で上回るので採っている。
+    `smooth=1` で切れる。
+    """
+    from cutetts.training.prosody import observed_nucleus
+
+    contour = [100.0, 200.0, 100.0]
+
+    assert observed_nucleus(contour) == 1                 # 平滑化で前へ寄る
+    assert observed_nucleus(contour, smooth=1) == 2       # 素の峰
+
+
+def test_nucleus_is_unmeasurable_with_too_few_voiced_moras():
+    from cutetts.training.prosody import observed_nucleus
+
+    assert observed_nucleus([float("nan"), 100.0]) == -1
+
+
+def test_nucleus_agreement_drops_unmeasurable_phrases():
+    from cutetts.training.prosody import nucleus_agreement
+
+    assert nucleus_agreement([1, 2, 0], [1, -1, 0]) == 1.0
+    assert nucleus_agreement([1, 2], [-1, -1]) is None
+
+
 def test_measure_of_silence_is_invalid():
     """無声しかない発話は NaN を返し、**0 とは区別する**。"""
     from cutetts.training.prosody import measure

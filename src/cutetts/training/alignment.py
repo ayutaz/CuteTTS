@@ -253,6 +253,31 @@ class MoraSpan:
         return self.end - self.start
 
 
+#: モーラの区間を後ろへ伸ばす上限（秒）。句間のポーズを丸ごと飲み込まない。
+MAX_GAP_FILL_SECONDS = 0.20
+
+
+def _fill_gaps(spans: list[MoraSpan], total: float) -> list[MoraSpan]:
+    """モーラの区間を次のモーラの手前まで伸ばす。
+
+    **CTCが返すのは音素の「芯」だけで、モーラ全体ではない。** 実測で
+    被覆が 19〜45%、モーラ長の中央値が 60〜80ms しかなかった
+    （日本語のモーラは会話音声で概ね100〜150ms）。窓が狭いと
+    **F0の取れるフレームが足りず、アクセント核を読めない**。
+
+    伸ばす量は `MAX_GAP_FILL_SECONDS` で頭打ちにする。句の間のポーズまで
+    飲み込むと、そのモーラのF0中央値が無音に引きずられる。
+    """
+    if not spans:
+        return spans
+    out: list[MoraSpan] = []
+    for index, span in enumerate(spans):
+        limit = spans[index + 1].start if index + 1 < len(spans) else total
+        end = min(max(span.end, limit), span.end + MAX_GAP_FILL_SECONDS)
+        out.append(MoraSpan(mora=span.mora, start=span.start, end=end))
+    return out
+
+
 @lru_cache(maxsize=1)
 def _bundle():
     import torchaudio
@@ -303,7 +328,8 @@ class MoraAligner:
             # モーラ列が音声より長い等でアラインできないことがある
             return []
         ratio = wave.shape[1] / emission.shape[1] / self.bundle.sample_rate
-        return [MoraSpan(mora=mora,
-                         start=float(span[0].start) * ratio,
-                         end=float(span[-1].end) * ratio)
-                for mora, span in zip(moras, spans)]
+        raw = [MoraSpan(mora=mora,
+                        start=float(span[0].start) * ratio,
+                        end=float(span[-1].end) * ratio)
+               for mora, span in zip(moras, spans)]
+        return _fill_gaps(raw, wave.shape[1] / self.bundle.sample_rate)
