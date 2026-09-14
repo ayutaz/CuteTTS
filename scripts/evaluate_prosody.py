@@ -78,20 +78,31 @@ def read_audio(path: Path) -> tuple[np.ndarray, int]:
     return samples, sample_rate
 
 
+def _cached_f0(cache, key, waveform, sample_rate):
+    """同じファイルのF0を使い回す。referenceは話者ごとに1つ固定なので効く。"""
+    if key not in cache:
+        cache[key] = track_f0(waveform, sample_rate)
+    return cache[key]
+
+
 def _rate(hits: int, total: int) -> dict:
     """一致率と分母をまとめる。"""
     return {"rate": (hits / total) if total else None, "n": total}
 
 
-def _nuclei(aligner, text, waveform, sample_rate):
-    """アクセント句ごとの核の位置を読む。失敗したら空リスト。"""
+def _nuclei(aligner, text, waveform, sample_rate, f0):
+    """アクセント句ごとの核の位置を読む。失敗したら空リスト。
+
+    `f0` は計算済みのものを渡す。**`track_f0` は1発話で約2秒かかるので、
+    同じ音声に対して呼び直さない。**
+    """
     if aligner is None:
         return []
     phrases = phrase_plan(text)
     spans = aligner.align(waveform, sample_rate, text)
     if len(spans) != sum(len(p.moras) for p in phrases):
         return []
-    pitches = mora_pitches(track_f0(waveform, sample_rate), spans)
+    pitches = mora_pitches(f0, spans)
     out = []
     offset = 0
     for phrase in phrases:
@@ -101,13 +112,14 @@ def _nuclei(aligner, text, waveform, sample_rate):
     return out
 
 
-def _accent(aligner, text, human_wave, human_rate, model_wave, model_rate):
+def _accent(aligner, text, human_wave, human_rate, human_f0,
+            model_wave, model_rate, model_f0):
     """辞書・人間・モデルの核を並べて返す。"""
     if aligner is None:
         return {}
     expected = [p.internal_nucleus for p in phrase_plan(text)]
-    human = _nuclei(aligner, text, human_wave, human_rate)
-    model = _nuclei(aligner, text, model_wave, model_rate)
+    human = _nuclei(aligner, text, human_wave, human_rate, human_f0)
+    model = _nuclei(aligner, text, model_wave, model_rate, model_f0)
     if len(human) != len(expected) or len(model) != len(expected):
         return {"accent": None}
     return {"accent": {"expected": expected, "human": human, "model": model}}
@@ -167,6 +179,8 @@ def main() -> None:
 
     rows: list[dict] = []
     saved = 0
+    # referenceは話者ごとに同じファイルなので、**ファイル名で使い回す**
+    f0_cache: dict[str, np.ndarray] = {}
     for index, item in enumerate(items):
         text = item["text"]
         spoken = expand_kanji_numerals(text) if args.expand_numerals else text
@@ -188,20 +202,25 @@ def main() -> None:
         human_wave, human_rate = read_audio(audio_dir / item["human_wav"])
         reference_wave, reference_rate = read_audio(reference)
 
-        model_stats = measure(model_wave, result.sample_rate)
-        human_stats = measure(human_wave, human_rate)
-        human_contour = semitone_contour(track_f0(human_wave, human_rate))
+        # **F0は1音声につき1回だけ計算する。** `track_f0` は1発話で約2秒
+        # かかるので、呼び直すと1件あたり7回＝14秒になる（実測で1.5分/件）。
+        human_f0 = _cached_f0(f0_cache, item["human_wav"], human_wave, human_rate)
+        reference_f0 = _cached_f0(f0_cache, item["reference_wav"],
+                                  reference_wave, reference_rate)
+        model_f0 = track_f0(model_wave, result.sample_rate)
+
+        model_stats = measure(model_wave, result.sample_rate, f0=model_f0)
+        human_stats = measure(human_wave, human_rate, f0=human_f0)
+        human_contour = semitone_contour(human_f0)
         similarity = contour_similarity(
-            human_contour, semitone_contour(track_f0(model_wave, result.sample_rate)))
+            human_contour, semitone_contour(model_f0))
         # **床を同じ文ごとに測る。** reference は同一話者の**別の文**なので、
         # 内容を共有しないときの相関になる（240文で平均 -0.001 / sd 0.152。
         # **真の床はほぼゼロ**。n=67 のときの +0.070 はノイズだった）。
         # モデルがこれを有意に上回らなければ、抑揚を再現できていない。
-        floor = contour_similarity(
-            human_contour,
-            semitone_contour(track_f0(reference_wave, reference_rate)))
-        accent = _accent(aligner, text, human_wave, human_rate,
-                         model_wave, result.sample_rate)
+        floor = contour_similarity(human_contour, semitone_contour(reference_f0))
+        accent = _accent(aligner, text, human_wave, human_rate, human_f0,
+                         model_wave, result.sample_rate, model_f0)
         rows.append({
             "index": index, "text": text, "speaker": item["speaker"],
             "speaker_key": item.get("speaker_key") or item["speaker"],

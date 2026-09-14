@@ -43,7 +43,7 @@
 **ただし `pyworld` にも罠がある（R-033）。** 広い範囲（55〜700Hz）を一度に
 探すと**倍音に乗る**。実測で男声（約110Hz）を **392Hz** と報告し、
 実音声8件中2件が 3.3〜3.8倍（537.6 / 586.6Hz）になった。
-`track_f0` は中心を先に求めてから狭い範囲で推定し直す。
+`track_f0` は上限350と700の中央値を比べ、跳んでいれば狭い範囲で推定し直す。
 **倍音に乗ったフレームを整数倍で引き戻す方式は棄却した** — どの係数を
 選ぶかが中心の推定誤差に強く依存し、実測で 185Hz を 292Hz にしてしまった。
 
@@ -69,13 +69,18 @@ FRAME_PERIOD_MS = 10.0
 F0_FLOOR_HZ = 65.0
 F0_CEIL_HZ = 700.0
 
-#: 上限を段階的に上げて倍音誤りを見つけるための梯子（Hz）。
+#: 倍音誤りを見つけるための低い方の上限（Hz）。
 #:
 #: **広い範囲を一度に探すと倍音に乗る。** 実測で、男声（約110Hz）を
 #: 上限700Hzで探すと **392Hz**（約3.5倍）と報告した。実音声でも8件中2件が
 #: 3.3〜3.8倍の誤りを出した（537.6Hz / 586.6Hz）。
 #: **抑揚の幅が20半音（1.7オクターブ）という不自然な値は、この誤りだった。**
-F0_CEIL_LADDER = (250.0, 350.0, 500.0, 700.0)
+#:
+#: 低い上限と高い上限の中央値を比べ、跳んでいれば低い方を採る。
+#: **`harvest` の実行時間は上限にも解析間隔にも標本化率にもほとんど依らない**
+#: （実測: 10秒の音声で 65-350 も 65-700 も約1.8秒）ので、
+#: **段数を減らすことだけが速くなる道**。4段→2段で 7.1秒→3.6秒。
+F0_COARSE_CEIL_HZ = 350.0
 
 #: 梯子を上る際、中央値がこの倍率以上に跳んだら倍音誤りと見なす。
 #:
@@ -135,27 +140,33 @@ def _harvest(samples: np.ndarray, sample_rate: int,
     return pyworld.stonemask(samples, coarse, times, sample_rate)
 
 
-def estimate_center_hz(samples: np.ndarray, sample_rate: int) -> float:
+def _median_of(f0: np.ndarray) -> float:
+    voiced = f0[f0 > 0]
+    if voiced.size < MIN_VOICED_FRAMES:
+        return float("nan")
+    return float(np.median(voiced))
+
+
+def estimate_center_hz(samples: np.ndarray, sample_rate: int,
+                       wide: np.ndarray | None = None) -> float:
     """話者のF0の中心（中央値）を、**倍音に乗らずに**求める。
 
-    上限を `F0_CEIL_LADDER` の順に上げ、中央値が `F0_OCTAVE_RATIO` 倍以上
-    跳んだところで止める。跳びは倍音誤り、緩やかな上昇は切り詰めが
-    解けただけ、と読み分ける。判定できなければ NaN。
+    上限 `F0_CEIL_HZ` と `F0_COARSE_CEIL_HZ` の2つで中央値を出し、
+    高い方が `F0_OCTAVE_RATIO` 倍以上なら**倍音に乗っている**と見なして
+    低い方を採る。判定できなければ NaN。
+
+    `wide` に上限 `F0_CEIL_HZ` の結果を渡すと、その分の計算を省く。
     """
-    center = float("nan")
-    for ceil in F0_CEIL_LADDER:
-        f0 = _harvest(samples, sample_rate, F0_FLOOR_HZ, ceil)
-        voiced = f0[f0 > 0]
-        if voiced.size < MIN_VOICED_FRAMES:
-            continue
-        median = float(np.median(voiced))
-        if center != center:                   # 最初の有効な推定
-            center = median
-            continue
-        if median / center >= F0_OCTAVE_RATIO:  # 倍音へ乗った
-            break
-        center = median
-    return center
+    if wide is None:
+        wide = _harvest(samples, sample_rate, F0_FLOOR_HZ, F0_CEIL_HZ)
+    top = _median_of(wide)
+    coarse = _median_of(
+        _harvest(samples, sample_rate, F0_FLOOR_HZ, F0_COARSE_CEIL_HZ))
+    if coarse != coarse:
+        return top
+    if top != top:
+        return coarse
+    return coarse if top / coarse >= F0_OCTAVE_RATIO else top
 
 
 #: 局所のオクターブ跳びを直すときに見る窓（フレーム数、前後合わせて）。
@@ -211,7 +222,8 @@ def track_f0(waveform: np.ndarray, sample_rate: int) -> np.ndarray:
 
     **2段階で推定する。** 先に話者のF0の中心を倍音に乗らずに求め
     （`estimate_center_hz`）、その周り `F0_SPAN` 倍の範囲で本番を推定する。
-    一度に広い範囲を探すと倍音に乗る（`F0_CEIL_LADDER` 参照）。
+    一度に広い範囲を探すと倍音に乗る（`F0_COARSE_CEIL_HZ` 参照）。
+    倍音に乗っていなければ広域パスをそのまま使い、1回分を省く。
     `F0_SPAN` は 1.9 / 2.2 / 2.6 で中央値がほぼ変わらないことを実測して選んだ。
 
     `pyworld` が要る（`[prosody]` extra）。
@@ -224,11 +236,14 @@ def track_f0(waveform: np.ndarray, sample_rate: int) -> np.ndarray:
 
     # **有声/無声の判定は広い範囲のパスから取る。** 狭い範囲だけで探すと、
     # 白色雑音のような非周期信号にも「その帯域での周期」を見つけてしまう
-    # （実測で 1/101 → 62/101 フレームが有声になった）。
+    # （実測で白色雑音が 1/101 → 62/101 フレーム）。上限350でも 15/101 出る。
     wide = _harvest(samples, sample_rate, F0_FLOOR_HZ, F0_CEIL_HZ)
-    center = estimate_center_hz(samples, sample_rate)
+    center = estimate_center_hz(samples, sample_rate, wide=wide)
     if center != center:
         f0 = np.zeros_like(wide)
+    elif abs(semitones(_median_of(wide) / center)) < 1.0:
+        # 倍音に乗っていない。**広域パスをそのまま使い、1回分を省く。**
+        f0 = correct_local_jumps(wide)
     else:
         f0 = _harvest(samples, sample_rate,
                       max(F0_FLOOR_HZ, center / F0_SPAN),
@@ -253,9 +268,15 @@ def semitone_contour(f0: np.ndarray) -> np.ndarray:
     return 12.0 * np.log2(voiced / np.median(voiced))
 
 
-def measure(waveform: np.ndarray, sample_rate: int) -> ProsodyStats:
-    """1発話の抑揚を測る。"""
-    f0 = track_f0(waveform, sample_rate)
+def measure(waveform: np.ndarray, sample_rate: int, *,
+            f0: np.ndarray | None = None) -> ProsodyStats:
+    """1発話の抑揚を測る。
+
+    `f0` を渡すと `track_f0` を呼び直さない。**同じ音声に対して何度も
+    呼ぶときは必ず渡すこと**（`track_f0` は1発話で約2秒かかる）。
+    """
+    if f0 is None:
+        f0 = track_f0(waveform, sample_rate)
     samples = np.asarray(waveform)
     length = samples.shape[-1] if samples.ndim else 0
     voiced = f0[f0 > 0]
