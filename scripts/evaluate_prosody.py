@@ -266,7 +266,8 @@ def main() -> None:
     device = resolve_device(args.device)
 
     payload = json.loads(Path(args.eval_set).read_text(encoding="utf-8"))
-    audio_dir = Path(payload.get("audio_dir", "data/eval/asr_floor"))
+    audio_dir = artifacts.as_local_path(
+        payload.get("audio_dir", "data/eval/prosody_audio"))
     items = payload["items"]
 
     if args.merge:

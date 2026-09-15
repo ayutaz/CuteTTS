@@ -30,6 +30,7 @@ LRS="${LRS:-1e-5 2e-5 5e-5 1e-4}"
 STEPS="${STEPS:-10000}"
 SHARDS="${SHARDS:-3}"
 EVAL_TIER="${EVAL_TIER:-0}"
+SKIP_TRAIN="${SKIP_TRAIN:-0}"
 DATA_REPO="tts-dataset/cutetts-ja-latents"
 
 if [ -z "${HF_TOKEN:-}" ]; then

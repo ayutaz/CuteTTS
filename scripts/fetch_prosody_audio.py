@@ -37,6 +37,10 @@ import tarfile
 from collections import defaultdict
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from cutetts.training import artifacts  # noqa: E402
+
 GOL_REPO = "midralab/gol-dataset"
 
 
@@ -54,7 +58,8 @@ def main() -> None:
     args = build_parser().parse_args()
     payload = json.loads(Path(args.eval_set).read_text(encoding="utf-8"))
     items = payload["items"]
-    audio_dir = Path(payload.get("audio_dir", "data/eval/prosody_audio"))
+    audio_dir = artifacts.as_local_path(
+        payload.get("audio_dir", "data/eval/prosody_audio"))
     audio_dir.mkdir(parents=True, exist_ok=True)
 
     # 必要な (game_id, 話者id, ファイル名) を集める。

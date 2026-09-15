@@ -38,6 +38,7 @@ from typing import Any
 
 __all__ = [
     "RUN_TIMESTAMP_FORMAT",
+    "as_local_path",
     "env_snapshot",
     "file_checksum",
     "new_run_dir",
@@ -92,6 +93,20 @@ def new_run_dir(phase: str, root: str | Path = "artifacts", *, timestamp: str | 
             continue
         return run_dir
     raise RuntimeError(f"同一秒のrun dirが100個ある: {base / stamp}")
+
+
+def as_local_path(value: str | Path) -> Path:
+    r"""JSONに入っているpathを、**この OS で使える形**に直す。
+
+    評価setのJSONはWindowsで書かれることがあり、``data\eval\prosody_audio``
+    のようにバックスラッシュが入る。Linuxではこれが**1つのファイル名**として
+    扱われ、``data\eval\prosody_audio`` という名前のディレクトリが
+    作られてしまう（vast.ai上で実測。**読み側と書き側が同じ間違いをするので
+    動いてしまい、気づきにくい**）。
+
+    **凍結済みのJSONは書き換えない**（checksumが変わる）。読むときに直す。
+    """
+    return Path(str(value).replace("\\", "/"))
 
 
 def _git_commit() -> str | None:

@@ -248,7 +248,9 @@ def main() -> None:
         "version": 2,
         "seed": args.seed,
         "created_for": "M1 / 抑揚とアクセントの測定",
-        "audio_dir": str(audio_dir),
+        # **`/` で書く。** Windowsで `\` を書くとLinuxで1つのファイル名に
+        # なり、`data\eval\prosody_audio` というディレクトリが作られる
+        "audio_dir": audio_dir.as_posix(),
         "note": (
             "人間の実音声と同一文・同一話者で比べるためのset。"
             "**referenceは話者ごとに1つ固定した別発話**（対象発話を渡すと抑揚が漏れる）。"
