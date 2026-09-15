@@ -41,10 +41,23 @@ cd "$WORKDIR"
 
 # ---------------------------------------------------------------- 準備
 echo "=== 準備 ==="
-python -m pip install -q torch==2.5.1 torchaudio==2.5.1 \
-  --index-url https://download.pytorch.org/whl/cu121
-python -m pip install -q -e ".[ja,prosody]"
-python -m pip install -q "huggingface_hub[cli]" transformers soundfile
+# **vast.ai の pytorch イメージは Python 3.11 で、`pyproject.toml` は 3.12 固定。**
+# uv で 3.12 の venv を作る（`uv` のvenvには pip が入らないので `uv pip` を使う）。
+if python -c 'import sys; sys.exit(0 if sys.version_info[:2]==(3,12) else 1)' 2>/dev/null \
+   && python -c 'import torch, pyopenjtalk, pyworld' 2>/dev/null; then
+  echo "  既に整っている（$(python -V 2>&1)）"
+else
+  command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh
+  export PATH="$HOME/.local/bin:$PATH"
+  [ -d .venv ] || uv venv --python 3.12 .venv
+  # shellcheck disable=SC1091
+  . .venv/bin/activate
+  uv pip install -q torch==2.5.1 torchaudio==2.5.1 \
+    --index-url https://download.pytorch.org/whl/cu121
+  uv pip install -q -e ".[ja,prosody]"
+  uv pip install -q "huggingface_hub[cli]" transformers soundfile
+fi
+python -c "import sys, torch; print('  ', sys.version.split()[0], torch.__version__, torch.cuda.is_available())"
 
 mkdir -p model checkpoints data
 [ -d model/CuteTTS ] || hf download OPPOer/CuteTTS --local-dir ./model/CuteTTS
