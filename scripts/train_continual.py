@@ -191,6 +191,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--speaker-cache", default="data/cache/speaker")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--dtype", default="bfloat16")
+    parser.add_argument("--trainable", default=",".join(TRAINABLE_MODULES),
+                        help="学習する子moduleをカンマ区切りで指定する（T2）。"
+                             "既定は6 module全部。**R-020以前は実質 head だけが"
+                             "学習されていた**ので、全部動かす今が最適とは限らない。"
+                             "head を凍結する例: locenc,locenc_to_lm_proj,"
+                             "lm_speaker_linear,qwen_backbone,stop_predictor")
     parser.add_argument("--param-dtype", default="float32",
                         choices=("float32", "checkpoint"),
                         help="学習中のパラメータdtype。checkpoint は bf16 のまま更新する"
@@ -245,9 +251,18 @@ def main() -> None:
     # lr=2e-5 の更新量が bf16 の丸め幅を下回り、backboneの91% / locencの84%が
     # 1stepも動かない（R-020）。fp32 に上げてから学習し、export で元のdtypeへ戻す。
     export_dtypes = promote_to_float32(model) if args.param_dtype == "float32" else None
-    freeze_all_but(model, TRAINABLE_MODULES)
+    # **学習対象は選べる**（T2）。R-020以前は実質 head だけが学習されていたので、
+    # 6 module全部を動かす今が最適とは限らない。
+    trainable_names = tuple(
+        name.strip() for name in args.trainable.split(",") if name.strip())
+    if not trainable_names:
+        raise SystemExit("--trainable が空")
+    frozen = freeze_all_but(model, trainable_names)
     trainable = [p for p in model.parameters() if p.requires_grad]
-    print(f"trainable parameters: {sum(p.numel() for p in trainable)/1e6:.1f}M")
+    print(f"trainable parameters: {sum(p.numel() for p in trainable)/1e6:.1f}M"
+          f"  ({', '.join(trainable_names)})")
+    if frozen:
+        print(f"frozen: {', '.join(frozen)}")
     print(f"param dtype: {args.param_dtype}"
           + ("" if export_dtypes else "  ← bf16のまま（R-020の再現用）"))
     drift = ParameterDrift(model, seed=args.seed)
@@ -422,6 +437,7 @@ def main() -> None:
 
     artifacts.write_metrics(run_dir, {
         "phase": "s0-train", "settings": vars(args),
+        "frozen_modules": frozen,
         "train_records": len(usable), "eligible_groups": len(groups),
         "history": history,
         "evaluations": evaluations,
