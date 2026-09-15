@@ -148,15 +148,25 @@ PYEOF
 # 消費電力45〜82W / TDP285W の実測）。分割して同時に走らせる。
 eval_sharded() {
   local script="$1" model="$2" label="$3" extra="${4:-}"
-  local dirs=()
+  local dirs=() run_dir
   for k in $(seq 1 "$SHARDS"); do
     python -u "scripts/${script}" --model-dir "$model" --label "${label}-s${k}" \
       --shard "${k}/${SHARDS}" --device cuda --save-samples 0 $extra \
       > "/tmp/${label}-s${k}.log" 2>&1 &
   done
   wait
+  # **ログ末尾は `完了: artifacts/<phase>/<timestamp>` で、`metrics.json` は
+  # 出ない。** run dir を取って自分で付ける（付けずに grep すると空になり、
+  # `--merge ",,"` で死ぬ。実測でここで止まった）。
   for k in $(seq 1 "$SHARDS"); do
-    dirs+=("$(grep -ao 'artifacts[^ ]*metrics.json' "/tmp/${label}-s${k}.log" | tail -1)")
+    run_dir="$(grep -ao 'artifacts/[A-Za-z0-9_-]*/[0-9T:-]*' "/tmp/${label}-s${k}.log" \
+               | tail -1)"
+    if [ -z "$run_dir" ] || [ ! -f "$run_dir/metrics.json" ]; then
+      echo "shard ${k} の run dir が取れない（/tmp/${label}-s${k}.log を見よ）" >&2
+      tail -5 "/tmp/${label}-s${k}.log" >&2
+      return 1
+    fi
+    dirs+=("$run_dir/metrics.json")
   done
   local joined
   joined="$(IFS=,; echo "${dirs[*]}")"
