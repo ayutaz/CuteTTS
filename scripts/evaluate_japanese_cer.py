@@ -39,6 +39,7 @@ import torchaudio
 
 from cutetts import CuteTTS
 from cutetts.training import artifacts
+from cutetts.training.evalstats import summarize_subsets
 from cutetts.training.reading import expand_kanji_numerals, to_arabic_numerals
 from cutetts.training.yomi import ReadingAssigner, reading_form
 
@@ -121,9 +122,41 @@ def build_parser() -> argparse.ArgumentParser:
                         help="生成前に漢数字を読み（仮名）へ展開する（J2 / D-008）。CERは元のtextに対して測るので、比較はそのまま成立する")
     parser.add_argument("--save-samples", type=int, default=6,
                         help="保存する音声の数。artifacts配下（公開禁止）")
+    parser.add_argument("--shard", metavar="K/N",
+                        help="評価setを N 分割して K 番目だけを測る（1始まり）。"
+                             "**生成はbatch=1でGPUが埋まらないので、分割して"
+                             "同時に走らせると速い**")
+    parser.add_argument("--merge", metavar="PATHS",
+                        help="shardの metrics.json をカンマ区切りで渡すと、"
+                             "生成をやり直さず行を結合して集計だけ作る（GPU不要）")
+    parser.add_argument("--no-warmup", action="store_true",
+                        help="捨て生成を省く。**プロセス内の最初の生成だけ結果が"
+                             "違う**ので、既定では1回捨てて揃える")
     parser.add_argument("--artifact-root", default="artifacts")
     parser.add_argument("--timestamp")
     return parser
+
+
+def parse_shard(text: str, total: int) -> set[int]:
+    """`K/N` を、担当する通し番号の集合へ。**飛び飛びに取る**（負荷を均す）。"""
+    part, _, count = text.partition("/")
+    index, size = int(part), int(count)
+    if not (1 <= index <= size):
+        raise SystemExit(f"--shard の値が範囲外: {text}")
+    return set(range(index - 1, total, size))
+
+
+def merge_rows(paths: str) -> list[dict]:
+    """shardの metrics.json から行を集める。**(subset, index) で重複を弾く。**"""
+    seen: dict[tuple, dict] = {}
+    for path in paths.split(","):
+        payload = json.loads(Path(path.strip()).read_text(encoding="utf-8"))
+        for row in payload.get("rows", []):
+            key = (row.get("subset"), row.get("index"))
+            if key in seen:
+                raise SystemExit(f"{key} が複数のshardにある: {path}")
+            seen[key] = row
+    return [seen[key] for key in sorted(seen, key=lambda k: (str(k[0]), k[1]))]
 
 
 def main() -> None:
@@ -134,6 +167,15 @@ def main() -> None:
     samples_dir.mkdir(parents=True, exist_ok=True)
 
     payload = json.loads(Path(args.eval_set).read_text(encoding="utf-8"))
+
+    if args.merge:
+        # **生成をやり直さない。** 行を結合して集計だけ作る
+        rows = merge_rows(args.merge)
+        summary = summarize_subsets(rows, payload["subsets"])
+        print(f"{len(rows)} 行を結合（shard {len(args.merge.split(','))} 個）")
+        write_output(run_dir, args, summary, rows)
+        return
+
     model = CuteTTS.from_pretrained(args.model_dir, device=str(device))
     asr = Transcriber(device)
     # J3 は tokenizer の語彙を見るので、評価対象の checkpoint から読む
@@ -141,10 +183,35 @@ def main() -> None:
     print(f"model: {args.model_dir} (variant={model.variant})")
     print(f"eval set: {args.eval_set}  checksum {artifacts.file_checksum(args.eval_set)[:16]}...")
 
+    # 全subsetを通した番号で分割する（subsetごとに分けると偏る）
+    flat = [(subset, index, item)
+            for subset, items in payload["subsets"].items()
+            for index, item in enumerate(items)]
+    picked = (parse_shard(args.shard, len(flat)) if args.shard
+              else set(range(len(flat))))
+    if args.shard:
+        print(f"shard {args.shard}: {len(picked)}/{len(flat)} 文")
+
+    # **プロセス内の最初の生成だけ結果が違う**（seedを毎回設定していても）。
+    # 初回の遅延初期化が乱数列をずらすため。捨て生成で揃える。
+    # これをしないと --shard の結合結果が一括と一致しない。
+    if not args.no_warmup:
+        first = next(item for order, (_, _, item) in enumerate(flat)
+                     if order in picked)
+        model.generate(first["text"], mode=args.mode,
+                       reference_audio=(args.reference_audio
+                                        if args.mode == "voice_clone" else None),
+                       seed=args.seed, max_decode_length=args.max_decode_length,
+                       show_progress=False)
+
     rows: list[dict] = []
     saved = 0
+    order = -1
     for subset, items in payload["subsets"].items():
         for index, item in enumerate(items):
+            order += 1
+            if order not in picked:
+                continue
             text = item["text"]
             # **CERは元のtextに対して測る。** 展開するのは生成への入力だけなので、
             # 展開なしの実行とそのまま比較できる。
@@ -185,33 +252,13 @@ def main() -> None:
                 saved += 1
             print(f"  [{subset}/{index:02d}] CER={value*100 if value is not None else -1:5.1f}%")
 
-    summary: dict = {}
-    for subset in payload["subsets"]:
-        values = [r["cer"] for r in rows
-                  if r["subset"] == subset and r.get("status") == "ok" and r.get("cer") is not None]
-        numeric = [r["cer_numeric"] for r in rows
-                   if r["subset"] == subset and r.get("status") == "ok"
-                   and r.get("cer_numeric") is not None]
-        reading = [r["cer_reading"] for r in rows
-                   if r["subset"] == subset and r.get("status") == "ok"
-                   and r.get("cer_reading") is not None]
-        if not values:
-            summary[subset] = {"n": 0}
-            continue
-        values_sorted = sorted(values)
-        summary[subset] = {
-            "n": len(values),
-            "cer_numeric_mean": statistics.mean(numeric) if numeric else None,
-            "cer_numeric_median": statistics.median(numeric) if numeric else None,
-            "cer_reading_mean": statistics.mean(reading) if reading else None,
-            "cer_reading_median": statistics.median(reading) if reading else None,
-            "cer_mean": statistics.mean(values),
-            "cer_median": statistics.median(values),
-            "cer_p90": values_sorted[int(len(values) * 0.9) - 1] if len(values) >= 10 else None,
-            "cer_min": values_sorted[0],
-            "cer_max": values_sorted[-1],
-        }
+    summary = summarize_subsets(rows, payload["subsets"])
 
+    write_output(run_dir, args, summary, rows)
+
+
+def write_output(run_dir, args, summary: dict, rows: list[dict]) -> None:
+    """metrics.json を書いて結果を表示する。**shardでも結合でも同じ形にする。**"""
     metrics = {
         "phase": "s0-cer",
         "label": args.label,
@@ -221,6 +268,7 @@ def main() -> None:
         "eval_set_sha256": artifacts.file_checksum(args.eval_set),
         "settings": {"mode": args.mode, "seed": args.seed,
                      "max_decode_length": args.max_decode_length},
+        "shard": args.shard, "merged_from": args.merge,
         "summary": summary,
         "rows": rows,
     }

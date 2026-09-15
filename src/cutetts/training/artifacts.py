@@ -80,14 +80,18 @@ def new_run_dir(phase: str, root: str | Path = "artifacts", *, timestamp: str | 
         run_dir.mkdir(parents=True, exist_ok=True)
         return run_dir
 
+    # **存在確認と mkdir の間に別プロセスが割り込む。** `--shard` で同時に
+    # 起動すると同じ秒に衝突し、`FileExistsError` で落ちた（実測）。
+    # 作成が成功するまで suffix を進める。
     stamp = datetime.now().strftime(RUN_TIMESTAMP_FORMAT)
-    run_dir = base / stamp
-    suffix = 0
-    while run_dir.exists():
-        suffix += 1
-        run_dir = base / f"{stamp}-{suffix:02d}"
-    run_dir.mkdir(parents=True, exist_ok=False)
-    return run_dir
+    for suffix in range(100):
+        run_dir = base / (stamp if suffix == 0 else f"{stamp}-{suffix:02d}")
+        try:
+            run_dir.mkdir(parents=True, exist_ok=False)
+        except FileExistsError:
+            continue
+        return run_dir
+    raise RuntimeError(f"同一秒のrun dirが100個ある: {base / stamp}")
 
 
 def _git_commit() -> str | None:

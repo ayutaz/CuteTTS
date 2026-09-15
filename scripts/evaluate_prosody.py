@@ -35,6 +35,21 @@ CERはASRの転写を見るので、抑揚が平坦でも転写が合えば誤�
     python scripts/evaluate_prosody.py \\
       --model-dir checkpoints/s1v2-fp32-30000 \\
       --eval-set data/eval/prosody_eval_set_v2.json --label trained --device cuda
+
+## 並列で回す
+
+**生成は `batch=1` の自己回帰なのでGPUが埋まらない**（実測: 使用率15〜71%、
+消費電力45〜82W / TDP285W）。1プロセスが使うGPUメモリは 4.2 GiB なので、
+**3分割して同時に走らせると約3倍**になる。
+
+    for k in 1 2 3; do
+      python scripts/evaluate_prosody.py --shard $k/3 --label trained-s$k ... &
+    done; wait
+    python scripts/evaluate_prosody.py --merge <s1>,<s2>,<s3> --label trained
+
+`--merge` は生成をやり直さず、行を結合して集計だけを作る（GPU不要）。
+集計は `cutetts.training.prosody.summarize_run` の1箇所にあるので、
+**分割して測っても結果は同じになる**。
 """
 
 from __future__ import annotations
@@ -56,6 +71,7 @@ from cutetts.training import artifacts  # noqa: E402
 from cutetts.training.alignment import MoraAligner, phrase_plan  # noqa: E402
 from cutetts.training.prosody import (  # noqa: E402
     contour_similarity,
+    summarize_run,
     measure,
     mora_pitches,
     observed_nucleus,
@@ -83,11 +99,6 @@ def _cached_f0(cache, key, waveform, sample_rate):
     if key not in cache:
         cache[key] = track_f0(waveform, sample_rate)
     return cache[key]
-
-
-def _rate(hits: int, total: int) -> dict:
-    """一致率と分母をまとめる。"""
-    return {"rate": (hits / total) if total else None, "n": total}
 
 
 def _nuclei(aligner, text, waveform, sample_rate, f0):
@@ -127,7 +138,7 @@ def _accent(aligner, text, human_wave, human_rate, human_f0,
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="抑揚を測る（M1）")
-    parser.add_argument("--model-dir", required=True)
+    parser.add_argument("--model-dir")
     parser.add_argument("--eval-set", default="data/eval/prosody_eval_set_v2.json")
     parser.add_argument("--label", required=True)
     parser.add_argument("--device", default="auto")
@@ -142,9 +153,110 @@ def build_parser() -> argparse.ArgumentParser:
                              "省く）。初回は 1.18 GB のモデルを取得する")
     parser.add_argument("--save-samples", type=int, default=0,
                         help="生成音声を残す件数。**artifacts配下の音声は公開しない**")
+    parser.add_argument("--no-warmup", action="store_true",
+                        help="捨て生成を省く。**プロセス内の最初の生成だけ結果が"
+                             "違う**ので、既定では1回捨てて揃える（--shard で"
+                             "分けた結果を一括と一致させるのに要る）")
+    parser.add_argument("--shard", metavar="K/N",
+                        help="評価setを N 分割して K 番目だけを測る（1始まり）。"
+                             "**生成はbatch=1でGPUが埋まらないので、分割して"
+                             "同時に走らせると速い**")
+    parser.add_argument("--merge", metavar="PATHS",
+                        help="shardの metrics.json をカンマ区切りで渡すと、"
+                             "生成をやり直さず行を結合して集計だけ作る（GPU不要）")
     parser.add_argument("--artifact-root", default="artifacts")
     parser.add_argument("--timestamp")
     return parser
+
+
+def parse_shard(text: str, total: int) -> list[int]:
+    """`K/N` を、担当する index の一覧へ。
+
+    **飛び飛びに取る**（`items[K-1::N]`）。発話の長さがまちまちなので、
+    前半・後半で切ると担当の重さが偏る。
+    """
+    part, _, count = text.partition("/")
+    index, size = int(part), int(count)
+    if not (1 <= index <= size):
+        raise SystemExit(f"--shard の値が範囲外: {text}")
+    return list(range(index - 1, total, size))
+
+
+def merge_rows(paths: str) -> list[dict]:
+    """shardの metrics.json から行を集める。**index で重複を弾く。**"""
+    seen: dict[int, dict] = {}
+    for path in paths.split(","):
+        payload = json.loads(Path(path.strip()).read_text(encoding="utf-8"))
+        for row in payload.get("rows", []):
+            key = row.get("index")
+            if key in seen:
+                raise SystemExit(f"index {key} が複数のshardにある: {path}")
+            seen[key] = row
+    return [seen[key] for key in sorted(seen)]
+
+
+def write_metrics(run_dir, args, summary: dict, rows: list[dict]) -> None:
+    """metrics.json を書く。**shardでも結合でも同じ形にする。**"""
+
+    artifacts.write_run_metadata(
+        run_dir, phase="prosody",
+        command=[Path(sys.argv[0]).name] + sys.argv[1:], seed=args.seed,
+        inputs={"model_dir": args.model_dir, "eval_set": args.eval_set},
+    )
+    artifacts.write_metrics(run_dir, {
+        "phase": "prosody", "label": args.label, "model_dir": str(args.model_dir),
+        "eval_set": str(args.eval_set),
+        "eval_set_sha256": artifacts.file_checksum(args.eval_set),
+        "settings": {"seed": args.seed, "expand_numerals": args.expand_numerals,
+                     "assign_yomi": args.assign_yomi},
+        "shard": args.shard, "merged_from": args.merge,
+        "summary": summary, "rows": rows,
+    })
+
+
+
+def report(summary: dict, run_dir) -> None:
+    """集計を表示する。"""
+    print("\n=== 抑揚 ===")
+    print(f"  n={summary['n']}  生成失敗 {summary['n_error']}")
+    if not summary.get("n"):
+        print("  **測定できた発話が無い**（有声フレームが足りないか、生成が全滅）")
+        print(f"\n完了: {run_dir}")
+        return
+    print(f"  半音の幅（5〜95%）  人間 {summary['human_semitone_range']:5.2f}  "
+          f"→ モデル {summary['model_semitone_range']:5.2f}")
+    print(f"  半音sd              人間 {summary['human_semitone_sd']:5.2f}  "
+          f"→ モデル {summary['model_semitone_sd']:5.2f}")
+    print(f"  長さ(秒)            人間 {summary['human_seconds']:5.2f}  "
+          f"→ モデル {summary['model_seconds']:5.2f}")
+    if summary["contour_similarity_mean"] is not None:
+        print(f"  輪郭の相関          平均 {summary['contour_similarity_mean']:5.2f}  "
+              f"中央値 {summary['contour_similarity_median']:5.2f}")
+    print(f"  人間より平坦だった文 {summary['n_flatter_than_human']}/{summary['n']}")
+    if "above_floor" in summary:
+        above = summary["above_floor"]
+        print(f"\n  床（同一話者・別の文）平均 {summary['floor_similarity_mean']:+.3f}")
+        print(f"  床との差 {above['difference']:+.3f} "
+              f"95%CI [{above['low']:+.3f}, {above['high']:+.3f}]  "
+              f"{'**有意に上回る**' if above['significant'] else '**床と区別できない**'}")
+    accent = summary.get("accent")
+    if accent:
+        print("\n=== アクセント核 ===")
+        print(f"  {accent['n_utterances']} 発話 / {accent['n_phrases']} アクセント句")
+        for key, label in (("model_vs_human", "**モデル 対 人間**"),
+                           ("human_vs_dictionary", "人間 対 辞書"),
+                           ("model_vs_dictionary", "モデル 対 辞書")):
+            entry = accent[key]
+            if entry["rate"] is None:
+                continue
+            print(f"  {label:18s} {entry['rate']:6.1%}  (n={entry['n']})")
+        print(f"  当てずっぽう {accent['chance']:6.1%}   "
+              f"固定回答 {accent['constant']:6.1%}")
+    else:
+        print("\n  アクセント核は測っていない（--no-accent）")
+    print(f"\n完了: {run_dir}")
+
+
 
 
 def main() -> None:
@@ -156,10 +268,26 @@ def main() -> None:
     payload = json.loads(Path(args.eval_set).read_text(encoding="utf-8"))
     audio_dir = Path(payload.get("audio_dir", "data/eval/asr_floor"))
     items = payload["items"]
+
+    if args.merge:
+        # **生成をやり直さない。** 行を結合して集計だけ作る
+        rows = merge_rows(args.merge)
+        summary = summarize_run(rows)
+        print(f"{len(rows)} 行を結合（shard {len(args.merge.split(','))} 個）")
+        write_metrics(run_dir, args, summary, rows)
+        report(summary, run_dir)
+        return
+
+    if args.model_dir is None:
+        raise SystemExit("--model-dir が要る（--merge のときは不要）")
     # **話者は speaker_key（game×speaker）で数える。** golの話者IDは表示名の
     # SHA-256 なので、game をまたぐと別人でも同じIDになりうる。
-    keys = {i.get("speaker_key") or i["speaker"] for i in items}
-    print(f"{len(items)} 文 / {len(keys)} 話者  device={device}")
+    indices = (parse_shard(args.shard, len(items)) if args.shard
+               else list(range(len(items))))
+    keys = {items[i].get("speaker_key") or items[i]["speaker"] for i in indices}
+    shard_note = f"  shard {args.shard}" if args.shard else ""
+    print(f"{len(indices)}/{len(items)} 文 / {len(keys)} 話者  "
+          f"device={device}{shard_note}")
 
     model = CuteTTS.from_pretrained(args.model_dir, device=str(device))
     assigner = None
@@ -177,11 +305,23 @@ def main() -> None:
     if args.save_samples:
         samples_dir.mkdir(parents=True, exist_ok=True)
 
+    # **プロセス内の最初の生成だけ結果が違う。** 実測で、同じ文でも
+    # 1件目に生成したときと2件目以降で幅が 21.99 / 13.60 と変わった
+    # （seedは呼び出しごとに設定しているのに）。初回の遅延初期化が乱数列を
+    # ずらしていると見られる。**捨て生成を1回入れて揃える。**
+    # これをしないと --shard で分けた結果が一括と一致しない。
+    if not args.no_warmup:
+        model.generate(items[indices[0]]["text"], mode="voice_clone",
+                       reference_audio=str(audio_dir / items[indices[0]]["reference_wav"]),
+                       seed=args.seed, max_decode_length=args.max_decode_length,
+                       show_progress=False)
+
     rows: list[dict] = []
     saved = 0
     # referenceは話者ごとに同じファイルなので、**ファイル名で使い回す**
     f0_cache: dict[str, np.ndarray] = {}
-    for index, item in enumerate(items):
+    for index in indices:
+        item = items[index]
         text = item["text"]
         spoken = expand_kanji_numerals(text) if args.expand_numerals else text
         if assigner is not None:
@@ -238,138 +378,9 @@ def main() -> None:
         print(f"  [{index:3d}] 幅 人{human_stats.semitone_range:5.1f} "
               f"/ 模{model_stats.semitone_range:5.1f}  相関 {similarity:5.2f}")
 
-    usable = [r for r in rows if r.get("status") == "ok"
-              and r["human"]["semitone_range"] == r["human"]["semitone_range"]
-              and r["model"]["semitone_range"] == r["model"]["semitone_range"]]
-    similarities = [r["contour_similarity"] for r in usable
-                    if r["contour_similarity"] is not None]
-
-    def mean(key: str, side: str) -> float | None:
-        values = [r[side][key] for r in usable]
-        return statistics.mean(values) if values else None
-
-    summary = {
-        "n": len(usable),
-        "n_error": sum(1 for r in rows if r.get("status") == "error"),
-        "human_semitone_range": mean("semitone_range", "human"),
-        "model_semitone_range": mean("semitone_range", "model"),
-        "human_semitone_sd": mean("semitone_sd", "human"),
-        "model_semitone_sd": mean("semitone_sd", "model"),
-        "human_seconds": mean("seconds", "human"),
-        "model_seconds": mean("seconds", "model"),
-        "contour_similarity_mean": statistics.mean(similarities) if similarities else None,
-        "contour_similarity_median": statistics.median(similarities) if similarities else None,
-        "n_flatter_than_human": sum(
-            1 for r in usable
-            if r["model"]["semitone_range"] < r["human"]["semitone_range"]),
-    }
-
-    # --- アクセント核 ---
-    phrases = [r["accent"] for r in rows if r.get("accent")]
-    if phrases:
-        def agree(left_key: str, right_key: str) -> tuple[int, int]:
-            hits = total = 0
-            for entry in phrases:
-                for left, right in zip(entry[left_key], entry[right_key]):
-                    if left < 0 or right < 0:   # 判定できなかった句は除く
-                        continue
-                    total += 1
-                    hits += left == right
-            return hits, total
-
-        counts: dict[int, int] = {}
-        for entry in phrases:
-            for value in entry["human"]:
-                if value >= 0:
-                    counts[value] = counts.get(value, 0) + 1
-        marginal = sum(counts.values())
-        summary["accent"] = {
-            "n_utterances": len(phrases),
-            "n_phrases": sum(len(e["expected"]) for e in phrases),
-            # **本来見たいのはこれ。** 辞書が正しいかに依存しない
-            "model_vs_human": _rate(*agree("human", "model")),
-            "human_vs_dictionary": _rate(*agree("expected", "human")),
-            "model_vs_dictionary": _rate(*agree("expected", "model")),
-            # 人間の核の分布から計算した当てずっぽうの水準
-            "chance": (sum((c / marginal) ** 2 for c in counts.values())
-                       if marginal else None),
-            "constant": (max(counts.values()) / marginal) if marginal else None,
-        }
-
-    # 床（同一話者・別の文）との対応のある比較。**床を超えていなければ
-    # 「抑揚を再現できた」とは言えない。**
-    paired = [(r["contour_similarity"], r["floor_similarity"]) for r in usable
-              if r["contour_similarity"] is not None
-              and r.get("floor_similarity") is not None]
-    if paired:
-        from cutetts.training.evalstats import paired_compare
-
-        # `difference = mean(b) - mean(a)` なので (床, モデル) の順に渡すと
-        # **正が「床を上回る」**になる。相関は大きいほど良いので、
-        # `better` / `worse` の数え方だけは逆に読むことになる（ここでは使わない）。
-        comparison = paired_compare([f for _, f in paired],
-                                    [s for s, _ in paired])
-        summary["floor_similarity_mean"] = statistics.mean(f for _, f in paired)
-        summary["above_floor"] = {
-            "difference": comparison.difference,
-            "low": comparison.low,
-            "high": comparison.high,
-            "significant": comparison.significant,
-            "n": comparison.n,
-        }
-
-    artifacts.write_run_metadata(
-        run_dir, phase="prosody",
-        command=[Path(sys.argv[0]).name] + sys.argv[1:], seed=args.seed,
-        inputs={"model_dir": args.model_dir, "eval_set": args.eval_set},
-    )
-    artifacts.write_metrics(run_dir, {
-        "phase": "prosody", "label": args.label, "model_dir": str(args.model_dir),
-        "eval_set": str(args.eval_set),
-        "eval_set_sha256": artifacts.file_checksum(args.eval_set),
-        "settings": {"seed": args.seed, "expand_numerals": args.expand_numerals,
-                     "assign_yomi": args.assign_yomi},
-        "summary": summary, "rows": rows,
-    })
-
-    print("\n=== 抑揚 ===")
-    print(f"  n={summary['n']}  生成失敗 {summary['n_error']}")
-    if not usable:
-        print("  **測定できた発話が無い**（有声フレームが足りないか、生成が全滅）")
-        print(f"\n完了: {run_dir}")
-        return
-    print(f"  半音の幅（5〜95%）  人間 {summary['human_semitone_range']:5.2f}  "
-          f"→ モデル {summary['model_semitone_range']:5.2f}")
-    print(f"  半音sd              人間 {summary['human_semitone_sd']:5.2f}  "
-          f"→ モデル {summary['model_semitone_sd']:5.2f}")
-    print(f"  長さ(秒)            人間 {summary['human_seconds']:5.2f}  "
-          f"→ モデル {summary['model_seconds']:5.2f}")
-    if summary["contour_similarity_mean"] is not None:
-        print(f"  輪郭の相関          平均 {summary['contour_similarity_mean']:5.2f}  "
-              f"中央値 {summary['contour_similarity_median']:5.2f}")
-    print(f"  人間より平坦だった文 {summary['n_flatter_than_human']}/{summary['n']}")
-    if "above_floor" in summary:
-        above = summary["above_floor"]
-        print(f"\n  床（同一話者・別の文）平均 {summary['floor_similarity_mean']:+.3f}")
-        print(f"  床との差 {above['difference']:+.3f} "
-              f"95%CI [{above['low']:+.3f}, {above['high']:+.3f}]  "
-              f"{'**有意に上回る**' if above['significant'] else '**床と区別できない**'}")
-    accent = summary.get("accent")
-    if accent:
-        print("\n=== アクセント核 ===")
-        print(f"  {accent['n_utterances']} 発話 / {accent['n_phrases']} アクセント句")
-        for key, label in (("model_vs_human", "**モデル 対 人間**"),
-                           ("human_vs_dictionary", "人間 対 辞書"),
-                           ("model_vs_dictionary", "モデル 対 辞書")):
-            entry = accent[key]
-            if entry["rate"] is None:
-                continue
-            print(f"  {label:18s} {entry['rate']:6.1%}  (n={entry['n']})")
-        print(f"  当てずっぽう {accent['chance']:6.1%}   "
-              f"固定回答 {accent['constant']:6.1%}")
-    else:
-        print("\n  アクセント核は測っていない（--no-accent）")
-    print(f"\n完了: {run_dir}")
+    summary = summarize_run(rows)
+    write_metrics(run_dir, args, summary, rows)
+    report(summary, run_dir)
 
 
 if __name__ == "__main__":

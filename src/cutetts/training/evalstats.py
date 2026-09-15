@@ -128,6 +128,41 @@ class PairedComparison:
         return not (self.low <= 0.0 <= self.high)
 
 
+def summarize_subsets(rows: Iterable[dict], subsets: Iterable[str]) -> dict:
+    """`evaluate_japanese_cer.py` の行を subset ごとに集計する。
+
+    **shardを結合したあとにも同じものを使う。** 集計を2箇所に書くと必ずずれる。
+    """
+    rows = list(rows)
+    summary: dict = {}
+    for subset in subsets:
+        picked = [r for r in rows
+                  if r.get("subset") == subset and r.get("status") == "ok"]
+
+        def column(key: str) -> list[float]:
+            return [r[key] for r in picked if r.get(key) is not None]
+
+        values = column("cer")
+        if not values:
+            summary[subset] = {"n": 0}
+            continue
+        numeric, reading = column("cer_numeric"), column("cer_reading")
+        ordered = sorted(values)
+        summary[subset] = {
+            "n": len(values),
+            "cer_numeric_mean": statistics.mean(numeric) if numeric else None,
+            "cer_numeric_median": statistics.median(numeric) if numeric else None,
+            "cer_reading_mean": statistics.mean(reading) if reading else None,
+            "cer_reading_median": statistics.median(reading) if reading else None,
+            "cer_mean": statistics.mean(values),
+            "cer_median": statistics.median(values),
+            "cer_p90": ordered[int(len(values) * 0.9) - 1] if len(values) >= 10 else None,
+            "cer_min": ordered[0],
+            "cer_max": ordered[-1],
+        }
+    return summary
+
+
 def paired_compare(
     a: Sequence[float],
     b: Sequence[float],

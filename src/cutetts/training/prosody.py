@@ -55,6 +55,7 @@
 from __future__ import annotations
 
 import math
+import statistics
 from dataclasses import dataclass
 
 import numpy as np
@@ -432,6 +433,101 @@ def pattern_agreement(left: tuple[bool, ...], right: tuple[bool, ...]) -> float:
         return float("nan")
     return sum(1 for i in range(size) if left[i] == right[i]) / size
 
+
+def _rate(hits: int, total: int) -> dict:
+    """一致率と分母をまとめる。分母0なら率は None。"""
+    return {"rate": (hits / total) if total else None, "n": total}
+
+
+def summarize_run(rows: list[dict]) -> dict:
+    """`evaluate_prosody.py` の行から集計を作る。
+
+    **shardを結合したあとにも同じものを使う。** 並列で測って
+    あとで足し合わせるとき、集計を2箇所に書くと必ずずれる。
+    """
+    from cutetts.training.evalstats import paired_compare
+
+    usable = [r for r in rows if r.get("status") == "ok"
+              and r["human"]["semitone_range"] == r["human"]["semitone_range"]
+              and r["model"]["semitone_range"] == r["model"]["semitone_range"]]
+    similarities = [r["contour_similarity"] for r in usable
+                    if r["contour_similarity"] is not None]
+
+    def mean(key: str, side: str) -> float | None:
+        values = [r[side][key] for r in usable]
+        return statistics.mean(values) if values else None
+
+    summary = {
+        "n": len(usable),
+        "n_error": sum(1 for r in rows if r.get("status") == "error"),
+        "human_semitone_range": mean("semitone_range", "human"),
+        "model_semitone_range": mean("semitone_range", "model"),
+        "human_semitone_sd": mean("semitone_sd", "human"),
+        "model_semitone_sd": mean("semitone_sd", "model"),
+        "human_seconds": mean("seconds", "human"),
+        "model_seconds": mean("seconds", "model"),
+        "contour_similarity_mean": statistics.mean(similarities) if similarities else None,
+        "contour_similarity_median": statistics.median(similarities) if similarities else None,
+        "n_flatter_than_human": sum(
+            1 for r in usable
+            if r["model"]["semitone_range"] < r["human"]["semitone_range"]),
+    }
+
+    # --- アクセント核 ---
+    phrases = [r["accent"] for r in rows if r.get("accent")]
+    if phrases:
+        def agree(left_key: str, right_key: str) -> tuple[int, int]:
+            hits = total = 0
+            for entry in phrases:
+                for left, right in zip(entry[left_key], entry[right_key]):
+                    if left < 0 or right < 0:   # 判定できなかった句は除く
+                        continue
+                    total += 1
+                    hits += left == right
+            return hits, total
+
+        counts: dict[int, int] = {}
+        for entry in phrases:
+            for value in entry["human"]:
+                if value >= 0:
+                    counts[value] = counts.get(value, 0) + 1
+        marginal = sum(counts.values())
+        summary["accent"] = {
+            "n_utterances": len(phrases),
+            "n_phrases": sum(len(e["expected"]) for e in phrases),
+            # **本来見たいのはこれ。** 辞書が正しいかに依存しない
+            "model_vs_human": _rate(*agree("human", "model")),
+            "human_vs_dictionary": _rate(*agree("expected", "human")),
+            "model_vs_dictionary": _rate(*agree("expected", "model")),
+            # 人間の核の分布から計算した当てずっぽうの水準
+            "chance": (sum((c / marginal) ** 2 for c in counts.values())
+                       if marginal else None),
+            "constant": (max(counts.values()) / marginal) if marginal else None,
+        }
+
+    # 床（同一話者・別の文）との対応のある比較。**床を超えていなければ
+    # 「抑揚を再現できた」とは言えない。**
+    paired = [(r["contour_similarity"], r["floor_similarity"]) for r in usable
+              if r["contour_similarity"] is not None
+              and r.get("floor_similarity") is not None]
+    # **2文以上ないと対応のある検定ができない。** 1文で落とさない
+    if len(paired) >= 2:
+
+        # `difference = mean(b) - mean(a)` なので (床, モデル) の順に渡すと
+        # **正が「床を上回る」**になる。相関は大きいほど良いので、
+        # `better` / `worse` の数え方だけは逆に読むことになる（ここでは使わない）。
+        comparison = paired_compare([f for _, f in paired],
+                                    [s for s, _ in paired])
+        summary["floor_similarity_mean"] = statistics.mean(f for _, f in paired)
+        summary["above_floor"] = {
+            "difference": comparison.difference,
+            "low": comparison.low,
+            "high": comparison.high,
+            "significant": comparison.significant,
+            "n": comparison.n,
+        }
+
+    return summary
 
 def semitones(ratio: float) -> float:
     """周波数比を半音へ。"""
