@@ -55,16 +55,29 @@ if [ ! -d data/s1v2 ]; then
     --local-dir ./data/s1v2
 fi
 
-MANIFEST="$(find data/s1v2 -name 'all_clustered.jsonl' | head -1)"
-LATENTS="$(find data/s1v2 -maxdepth 3 -type d -name 'latents*' | head -1)"
-SPEAKERS="$(find data/s1v2 -maxdepth 3 -type d -name 'speaker*' | head -1)"
-[ -n "$MANIFEST" ] || { echo "manifest が見つからない" >&2; exit 1; }
-echo "manifest: $MANIFEST"
-echo "latents:  $LATENTS"
+# **-v2 を明示する。** repoには旧版（manifests / latents / speaker）も
+# 入っており、`find | head -1` では旧版を拾うことがある。
+# S1v2 の 30,000 step は **manifests-v2（286,864発話）** で学習した。
+# 旧版は 232,941発話なので、取り違えると lr の比較そのものが無意味になる。
+MANIFEST="data/s1v2/manifests-v2/all_clustered.jsonl"
+LATENTS="data/s1v2/latents-v2"
+SPEAKERS="data/s1v2/speaker-v2"
+for path in "$MANIFEST" "$LATENTS" "$SPEAKERS"; do
+  [ -e "$path" ] || { echo "無い: $path" >&2; exit 1; }
+done
+LINES="$(wc -l < "$MANIFEST")"
+[ "$LINES" = "286864" ] || {
+  echo "manifestの行数が違う（期待 286864、実際 $LINES）。データ版を確認せよ" >&2
+  exit 1
+}
+echo "manifest: $MANIFEST ($LINES 発話)"
 
-# 評価setは結果を見てから作らない（凍結済みのものを取得する）
-python scripts/build_eval_set.py --out data/eval/eval_set_v3.json 2>/dev/null || \
-  echo "  ※ eval_set_v3.json は別途配置すること（結果を見てから作らない）"
+# **評価setは作り直さない**（結果を見てから変えると基準線が動く）。
+# JSONはローカルから転送済みのはず。音声だけ gol から取り出す。
+for f in data/eval/eval_set_v3.json data/eval/prosody_eval_set_v2.json; do
+  [ -f "$f" ] || { echo "無い: $f（ローカルから転送すること）" >&2; exit 1; }
+done
+HF_TOKEN="$HF_TOKEN" python scripts/fetch_prosody_audio.py
 
 # ---------------------------------------------------------------- 学習
 train_one() {
