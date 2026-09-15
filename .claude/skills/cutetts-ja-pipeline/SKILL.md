@@ -74,7 +74,7 @@ CER5.4GiB なので3並列が載る。
    APIキーは `~/.config/vastai/vast_api_key` にあるが**残高0**。入金はユーザーが行う。
    事前確認の PreToolUse フックは削除した（毎回の承認が作業を止めるため）。
 3. **同じインスタンス上で評価を分割並列するのは可**（上の「評価は分割して
-   並列に回す」を参照）。T1 はこれで 4水準を約6.5時間 / $0.80 で回した。
+   並列に回す」を参照）。T1 はこれで 4水準を約6.5時間 / $0.80 で回した。T2 は3条件を約6時間で回した。
 
 コマンド例はbash記法。PowerShellで実行するなら行継続 `\` は使えない（1行にする）。
 
@@ -150,6 +150,7 @@ data/raw/moe/info.csv         # 同上の話者一覧
 | m1 | `fetch_prosody_audio.py` | 不要 | 凍結済みの評価set + `HF_TOKEN` | 評価setに必要な音声だけを gol から取り出す（**setは作り直さない**） |
 | m1 | `evaluate_prosody.py` | **要** | checkpoint, 評価set | `artifacts/prosody/<ts>/`（抑揚の幅・輪郭の相関・アクセント核） |
 | t1 | `t1_lr_sweep.sh` | **要** | HF（latent cache）+ `HF_TOKEN` | vast.ai上で学習4水準 + 評価を完結（評価は `--shard` 並列） |
+| t2 | `t2_capacity_sweep.sh` | **要** | 同上 | batch size / 学習対象の3条件を学習 + 評価（`train_continual.py --trainable` で head凍結）。`SKIP_TRAIN=1` で評価だけ再開 |
 
 **依存順序**: `prepare_japanese_manifest` → `cache_audio_latents` → `build_voice_clusters`
 → `train_continual` → `diagnose_flow_loss` / `evaluate_japanese_cer` / `check_reference_following`。
