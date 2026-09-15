@@ -55,9 +55,15 @@ else
   . .venv/bin/activate
   uv pip install -q torch==2.5.1 torchaudio==2.5.1 \
     --index-url https://download.pytorch.org/whl/cu121
-  uv pip install -q -e ".[ja,prosody]"
-  uv pip install -q "huggingface_hub[cli]" transformers soundfile
+  uv pip install -q -e ".[ja,prosody,eval]"
+  uv pip install -q "huggingface_hub[cli]"
 fi
+# **ASRの読み込みに accelerate が要る。** 無いと transformers が
+# `NameError: init_empty_weights` で落ちる（vast.aiの素の環境で実測）
+python -c "import accelerate, transformers, soundfile" || {
+  echo "評価に要る依存が無い（accelerate / transformers / soundfile）" >&2
+  exit 1
+}
 python -c "import sys, torch; print('  ', sys.version.split()[0], torch.__version__, torch.cuda.is_available())"
 
 mkdir -p model checkpoints data

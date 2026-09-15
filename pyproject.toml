@@ -67,6 +67,15 @@ ja = [
 prosody = [
   "pyworld>=0.3,<1",
 ]
+# CER評価（`evaluate_japanese_cer.py`）。ASRに kotoba-whisper を使う。
+# **`accelerate` が無いと `transformers` のモデル読み込みが
+# `NameError: init_empty_weights` で落ちる**（vast.aiの素の環境で実測。
+# ローカルには偶然入っていたので気づけなかった）。
+eval = [
+  "transformers>=4.44,<5",
+  "accelerate>=0.30",
+  "soundfile>=0.12",
+]
 
 [project.scripts]
 cutetts = "cutetts.cli:main"
