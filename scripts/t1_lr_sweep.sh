@@ -170,7 +170,9 @@ eval_sharded() {
   done
   local joined
   joined="$(IFS=,; echo "${dirs[*]}")"
-  python -u "scripts/${script}" --merge "$joined" --label "$label" --save-samples 0
+  # **`$extra` も渡す。** `--eval-set` を落とすと既定値（存在しないfile）を
+  # 読んで `FileNotFoundError` になる（実測でここでも止まった）。
+  python -u "scripts/${script}" --merge "$joined" --label "$label"     --save-samples 0 $extra
 }
 
 cer_for() {
