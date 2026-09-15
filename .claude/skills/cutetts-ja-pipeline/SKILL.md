@@ -1,6 +1,6 @@
 ---
 name: cutetts-ja-pipeline
-description: Use when running, resuming, or debugging any CuteTTS Japanese continual-training phase in this repository (P0 baseline, P1b tokenizer, P1c VAE, P1d manifest, P1e latent cache, S0/S1 training, CER evaluation with the v3 600-sentence set, forgetting, streaming, listening kits, numeral reading J2, and the planned J3/J4/T1/T2/M1 phases) — covers setup, the venv, GPU rules, running jobs on vast.ai, publishing preprocessed data to Hugging Face, exact commands with their inputs and outputs, the fp32 master-weight requirement that made training work at all, and the measurement defects and silent failures that repeatedly produced wrong conclusions.
+description: Use when running, resuming, or debugging any CuteTTS Japanese continual-training phase in this repository (P0 baseline, P1b tokenizer, P1c VAE, P1d manifest, P1e latent cache, S0/S1 training, CER evaluation with the v3 600-sentence set, forgetting, streaming, listening kits, numeral reading J2, the completed J3 reading assignment, M1 prosody and accent measurement, and T1 learning-rate sweep, plus the planned T2 phase) — covers setup, the venv, GPU rules, running jobs on vast.ai, publishing preprocessed data to Hugging Face, exact commands with their inputs and outputs, the fp32 master-weight requirement that made training work at all, and the measurement defects and silent failures that repeatedly produced wrong conclusions.
 ---
 
 # CuteTTS 日本語学習パイプラインの実行
@@ -31,11 +31,38 @@ P0/P1/S0/S1 スクリプトを実際に完走させるためのリファレン�
    `summarize_eval_runs.py --metric cer_reading --compare A B`。
    人間の実音声の床すら 10.42% → **5.59%** と半分近くが表記だった。
 
+### 評価は分割して並列に回す
+
+**生成は `batch=1` の自己回帰なのでGPUが埋まらない**（単独で使用率15〜71%、
+消費電力45〜82W / TDP285W。3並列で98%）。1プロセスのVRAMは抑揚4.2GiB /
+CER5.4GiB なので3並列が載る。
+
+    for k in 1 2 3; do
+      python scripts/evaluate_prosody.py --shard $k/3 --label x-s$k ... &
+    done; wait
+    python scripts/evaluate_prosody.py --merge <s1>,<s2>,<s3> --label x --eval-set ...
+
+**分割結果が一括と一致することは検証済み**（抑揚9文で行9/9、CER8文で
+集計10/10・行8/8）。集計は `prosody.summarize_run` /
+`evalstats.summarize_subsets` の1箇所にある。
+
+**`--no-warmup` を付けないこと。** プロセス内の最初の生成だけ結果が違う
+（同じ文が1件目だと幅21.99、2件目以降だと13.60）。捨て生成で揃えないと
+結合が一括と合わない。
+
 ### 現在の最良checkpoint
 
 `checkpoints/s1v2-fp32-30000/`（ローカル退避済み、`strict=True` でロード確認済み）。
-v3 で in_domain **20.10 / 16.67**（base 35.86 / 31.91、ASR床 10.4）。
+
+| 指標 | base | **現行** | 人間 |
+|---|---:|---:|---:|
+| 素CER（v3 600文） | 35.86% | **20.10%** | 10.42% |
+| 読みCER | 30.94% | **13.38%** | 5.59% |
+| 輪郭の相関（240文） | +0.024 | **+0.122** | 床 -0.009 |
+| アクセント核（対人間） | 35.2% | **43.6%** | 辞書が44.8% |
+
 盲検A/Bで 15/18（83%、p=0.0038）と知覚できる差がある。
+**3指標すべてで学習が有意に効いているが、どれも人間に届いていない。**
 
 ## 実行環境とGPUの規約
 
@@ -46,13 +73,8 @@ v3 で in_domain **20.10 / 16.67**（base 35.86 / 31.91、ASR床 10.4）。
    **自分が作っていないインスタンスには触らない。**
    APIキーは `~/.config/vastai/vast_api_key` にあるが**残高0**。入金はユーザーが行う。
    事前確認の PreToolUse フックは削除した（毎回の承認が作業を止めるため）。
-3. **同じインスタンス上で評価を分割並列するのは可**（`--shard K/N` → `--merge`）。
-   生成は `batch=1` の自己回帰で**GPUが2〜3割しか埋まらない**（実測: 使用率
-   15〜71%、消費電力45〜82W / TDP285W）。1プロセスのVRAMは抑揚4.2GiB /
-   CER5.4GiB なので3並列が載る。**分割結果が一括と一致することは検証済み**
-   （抑揚9文で行9/9、CER8文で集計10/10・行8/8）。
-   ただし**捨て生成を省かないこと**（`--no-warmup` を付けない）。
-   プロセス内の最初の生成だけ結果が違うので、揃えないと結合が一括と合わない。
+3. **同じインスタンス上で評価を分割並列するのは可**（上の「評価は分割して
+   並列に回す」を参照）。T1 はこれで 4水準を約6.5時間 / $0.80 で回した。
 
 コマンド例はbash記法。PowerShellで実行するなら行継続 `\` は使えない（1行にする）。
 
@@ -123,6 +145,11 @@ data/raw/moe/info.csv         # 同上の話者一覧
 | j2 | `build_numeral_eval_set.py` | 不要 | — | `data/eval/numeral_eval_set.json`（200文・桁1〜7） |
 | j2 | `synthesize_japanese.py` | **要** | checkpoint, text | wav。**J2（読み展開）が既定で有効** |
 | m1 | `build_listening_kit.py` | **要**（`--html-only` は不要） | checkpoint, eval set | `artifacts/listen-kit/`（盲検A/B + アンカー + 書き出し） |
+| j3 | `build_yomi_eval_set.py` | 不要 | gol metadata, 学習manifest | `data/eval/yomi_eval_set.json`（300文。J3が置換する語を含む文だけ） |
+| m1 | `build_prosody_set.py` | 不要 | gol metadata + tars, 学習manifest | `data/eval/prosody_eval_set_v2.json`（240文/53話者）+ 音声 |
+| m1 | `fetch_prosody_audio.py` | 不要 | 凍結済みの評価set + `HF_TOKEN` | 評価setに必要な音声だけを gol から取り出す（**setは作り直さない**） |
+| m1 | `evaluate_prosody.py` | **要** | checkpoint, 評価set | `artifacts/prosody/<ts>/`（抑揚の幅・輪郭の相関・アクセント核） |
+| t1 | `t1_lr_sweep.sh` | **要** | HF（latent cache）+ `HF_TOKEN` | vast.ai上で学習4水準 + 評価を完結（評価は `--shard` 並列） |
 
 **依存順序**: `prepare_japanese_manifest` → `cache_audio_latents` → `build_voice_clusters`
 → `train_continual` → `diagnose_flow_loss` / `evaluate_japanese_cer` / `check_reference_following`。
@@ -295,6 +322,11 @@ yes | vastai destroy instance <id>
 | **dev flow の分離を過適合と読む** | 30,000 step で dev-zero-shot flow は base より悪化するが、CERは改善し話者追随も保たれた。**flow lossは品質の指標にならない**（R-015の3例目） |
 | 誤読が直らない | 主因は byte-fallback。`華` は単独pieceを持たず3つのバイト断片になる（R-027）。**J3（`--assign-yomi` / `synthesize_japanese.py` は既定で有効）が機械化済み**。読みCERで -4.23pt [-5.44, -3.05]。作品固有名（`藤宮高邦`）は一般語辞書では直らない |
 | 中国語が壊れている | **仕様**。日本語学習で漢字の読みが上書きされ、CER 11.5% → 77.2%（R-022）。D-032で日本語特化と決定。英語は無傷（WER 1.7%）。中国語CERは回帰の監視指標としてのみ使う |
+| **vast.aiで評価が即死する** | `accelerate` が無いと `transformers` のモデル読み込みが `NameError: init_empty_weights` で落ちる。**ローカルには偶然入っていることがある**。`pip install -e ".[eval]"` |
+| **shard結合が静かに壊れる** | ログ末尾は `完了: artifacts/<phase>/<timestamp>` で`metrics.json` は出ない。pathを組み立て直すこと。`--merge` にも `--eval-set` を渡す（抑揚側は既定値が存在するので**偶然通ってしまう**） |
+| **データ版を取り違える** | HF repoに旧版（232,941発話）と v2（286,864発話）が両方ある。`find \| head -1` では旧版を拾う。**取り違えると比較そのものが無意味**。行数で検証する |
+| **評価setJSONのpathがOS依存** | Windowsで書いた `data\\eval\\prosody_audio` はLinuxで**1つのファイル名**になる。`artifacts.as_local_path` で正規化する。**読み側と書き側が同じ間違いをするので動いてしまう** |
+| **単体で通ったから大丈夫と考える** | 上の3件は非shard経路では通っていた。**経路ごとに確かめる**（shard → 結合まで小さく1回通す） |
 | **交絡を確かめずに因果と判断する** | 6点が reference長で完全分離したので原因と考えたが、**対象文の長さと r=0.947 で交絡**しており直接検証も一貫しなかった（R-026は棄却）。完全分離は交絡を確かめるまで証拠にならない |
 
 ## 環境の罠

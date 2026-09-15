@@ -22,7 +22,9 @@ upstreamのコードは **推論専用** であり、学習コード（trainer /
 ```bash
 pip install torch==2.5.1 torchaudio==2.5.1  # CUDA 12.1なら --index-url https://download.pytorch.org/whl/cu121
 pip install -e .
-pip install -e ".[ja]"   # J3（読み付与）を使うとき。pyopenjtalk-plus（D-035）
+pip install -e ".[ja]"        # J3（読み付与）。pyopenjtalk-plus（D-035）
+pip install -e ".[prosody]"   # M1（抑揚・アクセント）。pyworld（D-040）
+pip install -e ".[eval]"      # CER評価。**accelerate が無いとASRが読めない**
 ```
 
 weightの取得（`model/` は .gitignore 済み）:
@@ -134,11 +136,21 @@ LMのtoken rateは `12.5 / 2 = 6.25 patch/s`。`--max-decode-length 750` は約1
 
 文書は情報を **確認済み / 決定済み / 提案 / 未確定** の4状態で区別する規約がある。
 「実装した」と「日本語学習が成功した」を混同しないこと。
-07章の意思決定表（D-001〜D-035）は項目を削除せず、状態と理由を追記して更新する。
+07章の意思決定表（D-001〜D-043）は項目を削除せず、状態と理由を追記して更新する。
 
-### 進捗（2026-09-02）
+### 進捗（2026-09-15）
 
-**P0 / P1 / P2 / S0 完了。S1の失敗原因が確定し、修正して最良値を更新した。**
+**P0 / P1 / P2 / S0 / S1 完了。J2 / J3 / M1 / T1 も完了。次は T2。**
+
+現行の最良は **S1v2 fp32 30,000 step**。3指標での位置:
+
+| 指標 | base | **現行** | 人間 |
+|---|---:|---:|---:|
+| 読みCER（600文） | 30.94% | **13.38%** | 5.59% |
+| 輪郭の相関（240文） | +0.024 | **+0.122** | 床 -0.009 |
+| アクセント核（対人間） | 35.2% | **43.6%** | 辞書が44.8% |
+
+**学習は3指標すべてを有意に改善している。** ただし**どれも人間に届いていない**。
 
 **S1が失敗していた原因は データではなく学習の実装だった（R-020）。**
 公開checkpointの `qwen_backbone` / `locenc` は bf16 で、`AdamW` がそれを直接
@@ -195,7 +207,13 @@ base比 -11.42pt。`ParameterDrift` の実測で、bf16では3,000 step後も ba
 | P1e | Pass A完了 | 44.5× realtime、外挿 65.3 GB / **239 GPU時間**。Pass BはS2直前 |
 | P2 | 完了 | ゴール7件達成。変異テスト9/9検出。すべてCPUで検証 |
 | S0 | 完了 | **in_domain CER 35.8% → 28.4%**。reference追随 12/12。7.15hで通過 |
-| S1 | **原因確定・修正済** | bf16でbackboneが凍結していた（R-020）。修正後 **20.10%**（v3・600文。base比 -15.77pt） |
+| S1 | 完了 | bf16でbackboneが凍結していた（R-020）。修正後 **20.10%**（v3・600文。base比 -15.77pt） |
+| J2 | 完了 | 漢数字の読み展開。**-11.80pt / 再学習不要** |
+| J3 | 完了 | 語の読み付与。専用set 読みCER **-4.23pt**、会話文 -1.26pt。**再学習不要**（D-036 / D-037） |
+| J4 | **見送り** | J3が内容語のfallbackをほぼ吸収した（R-030 / D-039） |
+| M1 | 完了 | 抑揚とアクセントを測れるようにした。**測定器を3回直した**（R-032 / R-033 / R-034）。学習が両方を有意に改善 |
+| T1 | 完了 | **学習率は梃子ではなかった**（R-035 / D-043）。2e-5 がほぼ底 |
+| T2 | **次に着手** | batch size / flow_copies / condition_dropout / **head凍結**が未検証 |
 
 ### 実装済み
 
@@ -208,6 +226,9 @@ src/cutetts/training/   P1: artifacts, manifest, text_rules, pairing,
                             reading（漢数字の読み展開 = J2）,
                             reference（短いreferenceの延長。R-026は棄却済み）,
                             listening_page（聴取評価ページ）
+                        J3: yomi（語の読み付与 + 読みレベルCER）
+                        M1: prosody（F0・抑揚の幅・輪郭の相関・アクセント核）,
+                            alignment（MMS_FAでモーラ単位の強制アラインメント）
 scripts/                reproduce_baseline, analyze_japanese_tokenizer,
                         evaluate_japanese_vae, prepare_japanese_manifest,
                         cache_audio_latents, build_voice_clusters,
@@ -218,6 +239,10 @@ scripts/                reproduce_baseline, analyze_japanese_tokenizer,
                             check_reference_following, build_eval_set,
                             evaluate_japanese_cer
                         S1: measure_asr_floor, s1_preprocess.sh
+                        J3: build_yomi_eval_set
+                        M1: build_prosody_set, fetch_prosody_audio,
+                            evaluate_prosody
+                        T1: t1_lr_sweep.sh（vast.ai上で完結。評価は --shard 並列）
 tools/                  mutation_check（テストが実際に効くかの検証）
 tests/training/         全件PASS（slowマーカーは実checkpointを要する）
 ```
@@ -267,13 +292,12 @@ S1のデータは [tts-dataset/cutetts-ja-latents](https://huggingface.co/datase
   **抑揚とアクセントは測れない**（聴取での指摘は40%と30%）。
 - ~~zero-shot split の話者不足（R-013）~~ → S1前処理で解消（119 cluster）。
 
-### 未探索の手段（2026-09-10 時点）
+### 未探索の手段（2026-09-15 時点）
 
-**探索したのは dtype / step数 / データ量 の3軸だけ。**
-学習17回すべてが **lr=2e-5 固定**で、`batch_size=4` / `flow_copies=4` /
-`condition_dropout=0.1` も全runで同じ（変えたのは warmup だけ）。
-しかも 2e-5 は backbone が凍結していた時期に選んだ値（R-020）。
-**「データ量は弱い、step数は頭打ち」はこの3軸の中での結論にすぎない。**
+**探索したのは dtype / step数 / データ量 / 学習率 の4軸。**
+学習21回すべてで `batch_size=4` / `flow_copies=4` / `condition_dropout=0.1` /
+**6 module全部を学習** が固定のまま。
+**「データ量は弱い、step数は頭打ち」はこの4軸の中での結論。**
 
 効いた順（実測）:
 
@@ -284,19 +308,21 @@ S1のデータは [tts-dataset/cutetts-ja-latents](https://huggingface.co/datase
 | **J3 読み付与（語）** | **-4.23pt**（読みCER） | **不要** |
 | step数 3,000 → 30,000 | -4.20pt | 要（済） |
 | **データ量 17h → 325.9h（19倍）** | **-1.90pt** | 要 |
+| **学習率（T1で4水準）** | **効果なし**（2e-5が最良） | 要（済） |
 
 **データ量は測った中で最も弱い。** 聴取で残った指摘は
-読み間違い45% / 抑揚40% / アクセント30%。
+読み間違い45% / 抑揚40% / アクセント30%で、**抑揚とアクセントは
+測れるようになった**（M1）が、**まだ人間に届いていない**。
 
 | # | フェーズ | 内容 | 状態 |
 |---|---|---|---|
 | ~~J3~~ | 読み付与 frontend | byte-fallback を含む語を読みへ置換。**再学習不要**。専用set 読みCER **-4.23pt**、会話文でも **-1.26pt**（どちらも有意） | **完了** |
 | ~~J4~~ | Tokenizer 互換拡張 | J3が内容語のfallbackをほぼ吸収したので**見送り**（R-030 / D-039） | 見送り |
-
-| T2 | batch size / 学習対象 | 未検証 | 待機 |
 | ~~M1~~ | 抑揚・アクセントの測定 | **完了**（240文/53話者）。学習で輪郭の相関 +0.024→**+0.122**、アクセント対人間 35.2%→**43.6%**（どちらも有意）。base は床と区別できない＝**抑揚は学習が与えている** | 完了 |
-| **T1** | 学習率の探索 | 17回すべて lr=2e-5 固定、しかも凍結時代の値（R-025）。**CER・抑揚・アクセントの3つで判定できるようになった** | **次に着手** |
-| S2 | 1,000時間 | **保留**。規模を上げる根拠が実測で得られていない | 保留 |
+| ~~T1~~ | 学習率の探索 | **完了。梃子ではなかった**（R-035 / D-043）。半分と5倍は読みCERが有意に悪く（+2.06 / +3.00pt）、2.5倍は区別できない。抑揚・アクセントはどの水準も有意差なし | 完了 |
+| **T2** | batch size / 学習対象 | **次に着手**。`batch_size=4` / `flow_copies=4` / `condition_dropout=0.1` / **head を凍結する選択肢**が未検証。head は凍結時代に唯一学習されていたので過適合の可能性 | **次** |
+| S2 | 1,000時間 | **保留**。規模を上げる根拠が実測で得られていない。T2の後に再判断 | 保留 |
+
 
 **棄却した仮説**: R-026（referenceの長さ）。対象文の長さと r=0.947 で交絡し、
 直接検証も一貫しなかった。`ensure_minimum_duration` は実装済みだが**効果の裏づけは無い**。
