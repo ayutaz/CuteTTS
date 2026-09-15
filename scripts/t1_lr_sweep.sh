@@ -113,23 +113,29 @@ train_one() {
 
 for lr in $LRS; do train_one "$lr"; done
 
-# **重みが動いた割合を必ず確認する。** 100%から外れていたら比較は無意味（R-020）
-echo "=== ParameterDrift ==="
-for lr in $LRS; do
-  python - "checkpoints/t1-lr${lr}" <<'PY'
-import json, sys
-from pathlib import Path
-root = Path(sys.argv[1])
-for path in sorted(root.glob("**/metrics.json")):
-    payload = json.loads(path.read_text(encoding="utf-8"))
+# **重みが動いた割合を必ず確認する。** 100%から外れていたら比較は無意味（R-020）。
+# metricsは `checkpoints/` ではなく `artifacts/s0-train/` に出る。
+echo "=== ParameterDrift（100%から外れた水準は比較に使えない）==="
+python - <<'PYEOF'
+import glob
+import json
+
+rows = []
+for path in sorted(glob.glob("artifacts/s0-train/*/metrics.json")):
+    payload = json.loads(open(path, encoding="utf-8").read())
     moved = payload.get("parameter_moved_ratio")
-    if moved:
-        print(f"  {root.name}: {moved}")
-        break
-else:
-    print(f"  {root.name}: parameter_moved_ratio が無い")
-PY
-done
+    if not moved:
+        continue
+    settings = payload.get("settings") or {}
+    rows.append((settings.get("lr"), settings.get("steps"), moved))
+if not rows:
+    print("  **parameter_moved_ratio が1件も無い。** 学習metricsを確認せよ")
+for lr, steps, moved in rows:
+    worst = min(moved.values())
+    mark = "" if worst > 0.99 else "   ← **凍結している。この水準は使えない**"
+    text = "  ".join(f"{k}={v:.4f}" for k, v in moved.items())
+    print(f"  lr={lr} steps={steps}  {text}{mark}")
+PYEOF
 
 # ---------------------------------------------------------------- 評価
 # **生成は batch=1 の自己回帰なのでGPUが埋まらない**（使用率15〜71%、
