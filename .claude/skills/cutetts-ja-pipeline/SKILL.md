@@ -1,6 +1,6 @@
 ---
 name: cutetts-ja-pipeline
-description: Use when running, resuming, or debugging any CuteTTS Japanese continual-training phase in this repository (P0 baseline, P1b tokenizer, P1c VAE, P1d manifest, P1e latent cache, S0/S1 training, CER evaluation with the v3 600-sentence set, forgetting, streaming, listening kits, numeral reading J2, the completed J3 reading assignment, M1 prosody and accent measurement, and T1 learning-rate sweep, plus the planned T2 phase) — covers setup, the venv, GPU rules, running jobs on vast.ai, publishing preprocessed data to Hugging Face, exact commands with their inputs and outputs, the fp32 master-weight requirement that made training work at all, and the measurement defects and silent failures that repeatedly produced wrong conclusions.
+description: Use when running, resuming, or debugging any CuteTTS Japanese continual-training phase in this repository (P0 baseline, P1b tokenizer, P1c VAE, P1d manifest, P1e latent cache, S0/S1 training, CER evaluation with the v3 600-sentence set, forgetting, streaming, listening kits, numeral reading J2, the completed J3 reading assignment, M1 prosody and accent measurement, the completed T1 learning-rate sweep and T2 batch-size/trainable-module sweep, plus the planned F1 / M2 / D1 / C1 phases) — covers setup, the venv, GPU rules, running jobs on vast.ai, publishing preprocessed data to Hugging Face, exact commands with their inputs and outputs, the fp32 master-weight requirement that made training work at all, and the measurement defects and silent failures that repeatedly produced wrong conclusions.
 ---
 
 # CuteTTS 日本語学習パイプラインの実行
@@ -57,12 +57,17 @@ CER5.4GiB なので3並列が載る。
 | 指標 | base | **現行** | 人間 |
 |---|---:|---:|---:|
 | 素CER（v3 600文） | 35.86% | **20.10%** | 10.42% |
-| 読みCER | 30.94% | **13.38%** | 5.59% |
+| 読みCER（frontend無し） | 30.94% | **13.38%** | 5.59% |
+| **読みCER（J2+J3込み＝実運用）** | — | **12.36%** | 5.59% |
 | 輪郭の相関（240文） | +0.024 | **+0.122** | 床 -0.009 |
 | アクセント核（対人間） | 35.2% | **43.6%** | 辞書が44.8% |
 
 盲検A/Bで 15/18（83%、p=0.0038）と知覚できる差がある。
 **3指標すべてで学習が有意に効いているが、どれも人間に届いていない。**
+
+**評価は既定で frontend を適用しない。** 実運用の値が要るときは
+`evaluate_japanese_cer.py --expand-numerals --assign-yomi` を付ける。
+**checkpoint どうしの比較では付けずに揃える**（過去の値と比較するため）。
 
 ## 実行環境とGPUの規約
 
