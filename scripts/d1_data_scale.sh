@@ -45,6 +45,10 @@ cd "$WORKDIR"
 python -c "import accelerate, transformers, soundfile, pyworld, pyopenjtalk" || {
   echo "依存が足りない。pip install -e '.[ja,prosody,eval]'" >&2; exit 1; }
 
+# **抑揚setの音声を先に揃える。** ここを忘れると学習とCER評価が終わった後に
+# `soundfile.LibsndfileError` で落ちる（実測で3.9時間インスタンスを遊ばせた）。
+[ -d data/eval/prosody_audio ] || HF_TOKEN="$HF_TOKEN" python scripts/fetch_prosody_audio.py
+
 MANIFEST="data/s1v2/manifests-v2/all_clustered.jsonl"
 LATENTS="data/s1v2/latents-v2"
 SPEAKERS="data/s1v2/speaker-v2"
