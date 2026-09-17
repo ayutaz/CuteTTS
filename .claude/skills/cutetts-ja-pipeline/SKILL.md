@@ -1,6 +1,6 @@
 ---
 name: cutetts-ja-pipeline
-description: Use when running, resuming, or debugging any CuteTTS Japanese continual-training phase in this repository (P0 baseline, P1b tokenizer, P1c VAE, P1d manifest, P1e latent cache, S0/S1 training, CER evaluation with the v3 600-sentence set, forgetting, streaming, listening kits, numeral reading J2, the completed J3 reading assignment, M1 prosody and accent measurement, the completed T1 learning-rate sweep and T2 batch-size/trainable-module sweep, plus the planned F1 / M2 / D1 / C1 phases) — covers setup, the venv, GPU rules, running jobs on vast.ai, publishing preprocessed data to Hugging Face, exact commands with their inputs and outputs, the fp32 master-weight requirement that made training work at all, and the measurement defects and silent failures that repeatedly produced wrong conclusions.
+description: Use when running, resuming, or debugging any CuteTTS Japanese continual-training phase in this repository (P0 baseline, P1b tokenizer, P1c VAE, P1d manifest, P1e latent cache, S0/S1 training, CER evaluation with the v3 600-sentence set, forgetting, streaming, listening kits, numeral reading J2, the completed J3 reading assignment, M1 prosody and accent measurement, the completed T1 learning-rate sweep and T2 batch-size/trainable-module sweep, the completed F1 frontend alignment and M2 prosody-ceiling measurement, plus the planned D1 / C1 phases) — covers setup, the venv, GPU rules, running jobs on vast.ai, publishing preprocessed data to Hugging Face, exact commands with their inputs and outputs, the fp32 master-weight requirement that made training work at all, and the measurement defects and silent failures that repeatedly produced wrong conclusions.
 ---
 
 # CuteTTS 日本語学習パイプラインの実行
@@ -59,8 +59,8 @@ CER5.4GiB なので3並列が載る。
 | 素CER（v3 600文） | 35.86% | **20.10%** | 10.42% |
 | 読みCER（frontend無し） | 30.94% | **13.38%** | 5.59% |
 | **読みCER（J2+J3込み＝実運用）** | — | **12.36%** | 5.59% |
-| 輪郭の相関（240文） | +0.024 | **+0.122** | 床 -0.009 |
-| アクセント核（対人間） | 35.2% | **43.6%** | 辞書が44.8% |
+| 輪郭の相関（240文） | +0.024 | **+0.122** | 床 -0.009 / **天井 +0.38** |
+| アクセント核（対人間） | 35.2% | **43.6%** | 辞書が44.8% / **天井 64.5%** |
 
 盲検A/Bで 15/18（83%、p=0.0038）と知覚できる差がある。
 **3指標すべてで学習が有意に効いているが、どれも人間に届いていない。**
@@ -154,6 +154,11 @@ data/raw/moe/info.csv         # 同上の話者一覧
 | m1 | `build_prosody_set.py` | 不要 | gol metadata + tars, 学習manifest | `data/eval/prosody_eval_set_v2.json`（240文/53話者）+ 音声 |
 | m1 | `fetch_prosody_audio.py` | 不要 | 凍結済みの評価set + `HF_TOKEN` | 評価setに必要な音声だけを gol から取り出す（**setは作り直さない**） |
 | m1 | `evaluate_prosody.py` | **要** | checkpoint, 評価set | `artifacts/prosody/<ts>/`（抑揚の幅・輪郭の相関・アクセント核） |
+| m2 | `build_retake_set.py` | 不要 | gol metadata + game_id | `data/eval/prosody_ceiling_set_v1.json`（別テイク200組/70話者）。**同一長の組は落とす** |
+| m2 | `measure_prosody_ceiling.py` | **要** | 別テイクset + 音声 | 人間 対 人間の天井（**生成しない**）。行の形は `evaluate_prosody.py` と同じ |
+| m2 | `m2_ceiling.sh` | **要** | 凍結set + `HF_TOKEN` | 音声取得から天井測定までを vast.ai 上で完結 |
+| d1 | `build_data_subset.py` | 不要 | 学習manifest | 指定時間の部分集合（**trainだけをクラスタ単位で絞る**。devは触らない） |
+| d1 | `d1_data_scale.sh` | **要** | HF（latent cache）+ `HF_TOKEN` | 部分集合づくり → 30,000 step 学習 → CER・抑揚評価 |
 | t1 | `t1_lr_sweep.sh` | **要** | HF（latent cache）+ `HF_TOKEN` | vast.ai上で学習4水準 + 評価を完結（評価は `--shard` 並列） |
 | t2 | `t2_capacity_sweep.sh` | **要** | 同上 | batch size / 学習対象の3条件を学習 + 評価（`train_continual.py --trainable` で head凍結）。`SKIP_TRAIN=1` で評価だけ再開 |
 

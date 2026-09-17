@@ -179,9 +179,9 @@ step数の順位すら取り違えました。
 | ~~M1~~ | 抑揚・アクセントの測定 | **完了**。学習が両方を有意に改善していると分かった |
 | ~~T1~~ | 学習率の探索 | **完了。梃子ではなかった**（2e-5がほぼ底） |
 | ~~T2~~ | batch size / 学習対象 | **完了。梃子ではなかった**（同じ計算量なら batch は差なし、head凍結は悪化） |
-| **F1** | 評価を実運用（J2+J3）と揃える | **次に着手**（GPU不要） |
-| **M2** | 抑揚・アクセントの天井 | 提案。別テイクが27,367組あると分かった |
-| **D1** | データ量の再測定（30,000 step） | 提案。S2 の進退を決める |
+| ~~F1~~ | 評価を実運用（J2+J3）と揃える | **完了**。実運用の主値は読みCER **12.36%** |
+| ~~M2~~ | 抑揚・アクセントの天井 | **完了。天井は 輪郭 +0.38 / アクセント 64.5%**。現行は隔たりの約32%で**伸びしろが残っている** |
+| **D1** | データ量の再測定（30,000 step） | **実施中**。S2 の進退を決める |
 | **C1** | 計算量4倍 | 提案 |
 | S2 | 1,000時間 | **保留**。**D1 の結果で進退を決める** |
 
@@ -195,7 +195,7 @@ step数の順位すら取り違えました。
 |---|---|
 | [RESULTS.md](docs/japanese-training/RESULTS.md) | **実測値の一覧**。まずここ |
 | [08-execution-plan.md](docs/japanese-training/08-execution-plan.md) | フェーズ定義とゴール |
-| [07-risks-and-decisions.md](docs/japanese-training/07-risks-and-decisions.md) | リスク（R-001〜R-027）と意思決定（D-001〜D-035） |
+| [07-risks-and-decisions.md](docs/japanese-training/07-risks-and-decisions.md) | リスク（R-001〜R-037）と意思決定（D-001〜D-045） |
 | [README.md](docs/japanese-training/README.md) | プロジェクトの概要 |
 | [01〜06章](docs/japanese-training/) | アーキテクチャ、戦略、データ、学習実装、実験計画、評価計画 |
 | [S0-GATE.md](docs/japanese-training/S0-GATE.md) | S0時点の記録（数値は凍結） |
