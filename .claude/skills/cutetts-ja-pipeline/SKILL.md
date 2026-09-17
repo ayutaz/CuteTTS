@@ -151,6 +151,7 @@ data/raw/moe/info.csv         # 同上の話者一覧
 | s1 | `measure_asr_floor.py` | **要**（`--build` は不要） | gol metadata + tars | `artifacts/asr-floor/<ts>/` |
 | s1 | `s1_preprocess.sh` | **要** | HF（gol）+ `HF_TOKEN` | latent cache を HF へ upload |
 | s1 | `summarize_eval_runs.py` | 不要 | `artifacts/**/metrics.json` | 横断集計・対応のある検定（信頼区間つき） |
+| g1 | `summarize_stop_health.py` | 不要 | `artifacts/**/s0-cer/*/metrics.json` | **喋り続け・自己反復・打切**の率（生成をやり直さない）。`--compare A B` で検定 |
 | s1 | `evaluate_forgetting.py` | **要** | checkpoint | `artifacts/forgetting/<ts>/`（英語WER / 中国語CER） |
 | j2 | `build_numeral_eval_set.py` | 不要 | — | `data/eval/numeral_eval_set.json`（200文・桁1〜7） |
 | j2 | `synthesize_japanese.py` | **要** | checkpoint, text | wav。**J2（読み展開）が既定で有効** |
