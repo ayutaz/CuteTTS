@@ -64,10 +64,16 @@ def main() -> None:
 
     # 必要な (game_id, 話者id, ファイル名) を集める。
     # ファイル名は `{game8}_{speaker8}_{もとの名前}` の形で保存されている。
+    # **`_wav` で終わるキーをすべて対象にする。** M2（天井）のsetは
+    # テイクBの `take_b_wav` を持つので、2つ決め打ちだと1本だけ落ちる
+    wav_keys = sorted({key for item in items for key in item
+                       if key.endswith("_wav")})
     wanted: dict[str, dict[str, str]] = defaultdict(dict)
     for item in items:
-        for key in ("human_wav", "reference_wav"):
-            name = item[key]
+        for key in wav_keys:
+            name = item.get(key)
+            if name is None:
+                continue
             game8, speaker8, original = name.split("_", 2)
             if game8 != item["game_id"][:8]:
                 raise SystemExit(f"game_idと名前が合わない: {name}")
