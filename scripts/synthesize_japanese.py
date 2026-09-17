@@ -53,8 +53,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import soundfile as sf  # noqa: E402
 
 from cutetts import CuteTTS  # noqa: E402
-from cutetts.training.reading import expand_kanji_numerals  # noqa: E402
-from cutetts.training.yomi import ReadingAssigner  # noqa: E402
+from cutetts.training.yomi import ReadingAssigner, apply_frontend  # noqa: E402
 from cutetts.training.reference import (  # noqa: E402
     DEFAULT_MINIMUM_SECONDS,
     duration_seconds,
@@ -92,15 +91,17 @@ def main() -> None:
 
     spoken = args.text
     if not args.raw_text:
-        spoken = expand_kanji_numerals(spoken)          # J2: 漢数字 → 読み
+        # J3: byte-fallback を含む語を読みへ（R-027）。語彙はこの
+        # checkpoint の tokenizer から読む
+        assigner = None
         if not args.no_yomi:
-            # J3: byte-fallback を含む語を読みへ（R-027）。
-            # 語彙はこのcheckpointの tokenizer から読む
             assigner = ReadingAssigner.from_model_dir(args.model_dir)
-            spoken = assigner.apply(spoken)
-            if assigner.replaced:
-                print("読み付与: " + "  ".join(
-                    f"{s}→{r}" for s, r in assigner.replaced))
+        # **J3 → J2 の順で掛ける**（`yomi.apply_frontend`）。逆にすると
+        # J3 が J2 の仮名列を再解釈して漢数字を復活させる（`せんにひゃく八ジュウ`）
+        spoken = apply_frontend(spoken, assigner=assigner, expand_numerals=True)
+        if assigner is not None and assigner.replaced:
+            print("読み付与: " + "  ".join(
+                f"{surface}→{reading}" for surface, reading in assigner.replaced))
     if spoken != args.text:
         print(f"入力: {args.text}\n  → {spoken}")
 

@@ -40,8 +40,8 @@ import torchaudio
 from cutetts import CuteTTS
 from cutetts.training import artifacts
 from cutetts.training.evalstats import summarize_subsets
-from cutetts.training.reading import expand_kanji_numerals, to_arabic_numerals
-from cutetts.training.yomi import ReadingAssigner, reading_form
+from cutetts.training.reading import to_arabic_numerals
+from cutetts.training.yomi import ReadingAssigner, apply_frontend, reading_form
 
 ASR_MODEL = "kotoba-tech/kotoba-whisper-v2.0"
 _PUNCT = re.compile(r"[\s、。「」『』・…‥！？!?,.\-―ー~〜\"'()（）]")
@@ -215,7 +215,9 @@ def main() -> None:
             text = item["text"]
             # **CERは元のtextに対して測る。** 展開するのは生成への入力だけなので、
             # 展開なしの実行とそのまま比較できる。
-            spoken = expand_kanji_numerals(text) if args.expand_numerals else text
+            # **J3 → J2 の順**（逆にすると数詞が壊れる。`yomi.apply_frontend`）
+            spoken = apply_frontend(text, assigner=yomi,
+                                    expand_numerals=args.expand_numerals)
             if yomi is not None:
                 spoken = yomi.apply(spoken)
             try:

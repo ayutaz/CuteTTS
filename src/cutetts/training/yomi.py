@@ -125,6 +125,30 @@ def reading_form(text: str) -> str:
         c for c in to_hiragana("".join(parts)) if c not in _PUNCT_FOR_READING)
 
 
+def apply_frontend(text: str, *, assigner: "ReadingAssigner | None" = None,
+                   expand_numerals: bool = True) -> str:
+    """読み付与（J3）→ 漢数字の展開（J2）の順で frontend を掛ける。
+
+    **順序を逆にすると数詞が壊れる。** J3 は `run_frontend` で形態素解析を
+    やり直すので、J2 が作った仮名列（`せんにひゃくはちじゅう`）を再解釈して
+    **漢数字を復活させる**（`せんにひゃく八ジュウ`）。小書き仮名（`ゅ`）が
+    byte-fallback なのが引き金で、`じゅう` が置換対象になる。
+
+    実測（`checkpoints/s1v2-fp32-30000` の vocab）:
+
+    | 原文 | J2 → J3（誤り） | **J3 → J2（本関数）** |
+    |---|---|---|
+    | 千二百八十円 | せんにひゃく八ジュウエン | **せんにひゃくはちじゅうエン** |
+    | 八月三十一日 | 八月さんジュウ一日 | **八月さんじゅういち日** |
+
+    数詞を含まない文では両者は一致する（`中華料理` → `チュウカ料理`）。
+    """
+    from cutetts.training.reading import expand_kanji_numerals
+
+    spoken = assigner.apply(text) if assigner is not None else text
+    return expand_kanji_numerals(spoken) if expand_numerals else spoken
+
+
 def _load_vocab(model_dir: str | Path) -> frozenset[str]:
     """checkpointのtokenizerが単独pieceとして持つ文字の集合。
 

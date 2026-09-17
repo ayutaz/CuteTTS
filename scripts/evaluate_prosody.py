@@ -78,7 +78,7 @@ from cutetts.training.prosody import (  # noqa: E402
     semitone_contour,
     track_f0,
 )
-from cutetts.training.reading import expand_kanji_numerals  # noqa: E402
+from cutetts.training.yomi import apply_frontend  # noqa: E402
 
 
 def resolve_device(name: str) -> torch.device:
@@ -324,7 +324,9 @@ def main() -> None:
     for index in indices:
         item = items[index]
         text = item["text"]
-        spoken = expand_kanji_numerals(text) if args.expand_numerals else text
+        # **J3 → J2 の順**（逆にすると数詞が壊れる。`yomi.apply_frontend`）
+        spoken = apply_frontend(text, assigner=assigner,
+                                expand_numerals=args.expand_numerals)
         if assigner is not None:
             spoken = assigner.apply(spoken)
         reference = audio_dir / item["reference_wav"]

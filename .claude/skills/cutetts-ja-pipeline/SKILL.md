@@ -69,6 +69,11 @@ CER5.4GiB なので3並列が載る。
 `evaluate_japanese_cer.py --expand-numerals --assign-yomi` を付ける。
 **checkpoint どうしの比較では付けずに揃える**（過去の値と比較するため）。
 
+**frontend は `yomi.apply_frontend` 経由で掛ける（J3 → J2 の順）。**
+順序を逆にすると J3 が J2 の仮名列を再解釈して漢数字を復活させる
+（`千二百八十円` → `せんにひゃく八ジュウエン`。R-039）。
+小書き仮名 `ゅ` が byte-fallback なのが引き金。
+
 ## 実行環境とGPUの規約
 
 1. **Python は必ず `.venv/Scripts/python.exe`。** リポジトリルートから実行する。
