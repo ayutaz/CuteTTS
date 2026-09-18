@@ -52,7 +52,12 @@ CER5.4GiB なので3並列が載る。
 
 ### 現在の最良checkpoint
 
-`checkpoints/s1v2-fp32-30000/`（ローカル退避済み、`strict=True` でロード確認済み）。
+**`checkpoints/c1-batch16-30k/inference/`**（C1。batch16 × 30,000 step =
+48万サンプル。ローカル退避済み、`strict=True` でロード確認済み）。
+読みCER **11.98%**（従来の `s1v2-fp32-30000` は 13.38%。-1.40pt、有意。R-043）。
+**frontend 込みの実運用値は未測定**（F3 で測る）。
+
+旧最良 `checkpoints/s1v2-fp32-30000/` も残してある（3指標の基準線として使う）。
 
 | 指標 | base | **現行** | 人間 |
 |---|---:|---:|---:|

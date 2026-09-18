@@ -623,6 +623,7 @@ M3b（参照から韻律を読む経路が無い）と整合する。
 | 環境 | vast.ai RTX 3090（$0.224/h） |
 | 所要 | 学習 約4.7時間（30,000 step / batch 16）+ 評価 約1.2時間 |
 | 費用 | 約$1.3 |
+| checkpoint | **`checkpoints/c1-batch16-30k/inference/`**（1.2 GB。ローカル退避済み、`strict=True` でロード確認済み） |
 
 ## F2 / M3b / D2（2026-09-18、vast.ai RTX 3090）
 
