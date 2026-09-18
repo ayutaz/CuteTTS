@@ -49,7 +49,7 @@ echo "待機 ${waited} 分"
 MANIFEST="data/s1v2/manifests-v2/all_clustered.jsonl"
 LATENTS="data/s1v2/latents-v2"
 SPEAKERS="data/s1v2/speaker-v2"
-F0="data/s1v2/f0-full"
+F0="${F0_CACHE:-data/s1v2/f0-v2}"   # **検証で作った分を引き継ぐ**
 OUT="checkpoints/m4c-full"
 
 LINES="$(wc -l < "$MANIFEST")"
@@ -57,7 +57,9 @@ LINES="$(wc -l < "$MANIFEST")"
   echo "manifestの行数が違う（期待 286864、実際 $LINES）" >&2; exit 1; }
 
 # ---------------------------------------------------------------- 1. F0 cache
-# **一番重い段。** GPU（decode）と CPU（harvest）を並べて約10時間の見込み。
+# **一番重い段。** 実測 50× 実時間（A10 / 16 workers。律速は CPU の harvest）
+# なので 325.9h で約6.5時間。`--manifest` を渡さないので dev/test も作る
+# （392.8h ぶん ≒ 7.9時間）。**検証で作った分は id が重複するので飛ばす。**
 # 既にある id は飛ばすので、途中で落ちても同じコマンドで再開できる。
 echo "=== 1/4 F0 cache（325.9h）==="
 python -u scripts/cache_f0_targets.py --latent-cache "$LATENTS" --out "$F0" \
