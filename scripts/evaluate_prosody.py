@@ -183,9 +183,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--assign-yomi", action="store_true",
                         help="J3（語の読み付与）を掛けてから合成する")
     parser.add_argument("--f0-source", default="none",
-                        choices=("none", "oracle", "transfer"),
+                        choices=("none", "oracle", "transfer", "mismatch"),
                         help="F0 の条件（M4c）。oracle はその文自身の人間音声、"
-                             "transfer は同じ台詞の別テイク（天井setのみ）")
+                             "transfer は同じ台詞の別テイク（天井setのみ）、"
+                             "**mismatch は同一話者の別の文**（対照。効果が"
+                             "特異的かを見る）")
     parser.add_argument("--no-f0-roundtrip", action="store_true",
                         help="F0 を取る前に VAE で往復させない。**既定は往復させる**"
                              "（学習側の F0 は decode 由来なので分布を揃える）")
@@ -404,8 +406,9 @@ def main() -> None:
         reference = audio_dir / item["reference_wav"]
         f0_hook = None
         if f0_conditioner is not None:
-            source_key = ("human_wav" if args.f0_source == "oracle"
-                          else "take_b_wav")
+            source_key = {"oracle": "human_wav",
+                          "transfer": "take_b_wav",
+                          "mismatch": "reference_wav"}[args.f0_source]
             if not item.get(source_key):
                 rows.append({"index": index, "text": text, "status": "error",
                              "detail": f"{source_key} が無い（--f0-source"
