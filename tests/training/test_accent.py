@@ -114,3 +114,52 @@ def test_実データ風の文で未知の音素が出ない(text):
     marked = accent_marked_text(text)
     assert marked.unknown == (), f"{text}: {marked.unknown}"
     assert marked.moras > 0
+
+
+# ---------------------------------------------------------------- shuffle 対照
+#
+# **記号が読みに効いた理由を切り分けるための対照。**
+# 記号の数と句の構造は同じまま、核の位置だけを偽の位置へ動かす。
+# これが壊れていると「区切りの効果」と「内容の効果」が分離できない。
+
+
+def test_shuffleは記号の数を変えない():
+    text = "明日の待ち合わせは、駅の南口で大丈夫ですか。"
+    assert accent_marked_text(text, shuffle=True).marks == \
+        accent_marked_text(text).marks
+
+
+def test_shuffleはモーラ数を変えない():
+    text = "箸を持つ手と、橋を渡る足。"
+    assert accent_marked_text(text, shuffle=True).moras == \
+        accent_marked_text(text).moras
+
+
+def test_shuffleは核の位置を動かす():
+    """同音異義の区別が**消える**のが狙い。"""
+    marked = accent_marked_text("箸を持つ手と、橋を渡る足。", shuffle=True).text
+    assert marked != accent_marked_text("箸を持つ手と、橋を渡る足。").text
+
+
+def test_shuffleは同じ句に同じ偽位置を割り当てる():
+    """再現できないと、同じ語が文ごとに違う読みになって条件が濁る。"""
+    a = accent_marked_text("駅の南口で待っています。", shuffle=True).text
+    b = accent_marked_text("駅の南口で待っています。", shuffle=True).text
+    assert a == b
+
+
+def test_shuffleは平板に記号を付けない():
+    """核が無い句に記号を足すと、記号の数が変わってしまう。"""
+    text = "桜が咲いた。"
+    assert accent_marked_text(text, shuffle=True).marks == \
+        accent_marked_text(text).marks
+
+
+@pytest.mark.parametrize("text", [
+    "そう言われましてもぉー……困りますね。",
+    "中華料理のお店へ、湊さんと行きませんか。",
+    "ティッシュを取って。",
+])
+def test_shuffleでも未知の音素が出ない(text):
+    marked = accent_marked_text(text, shuffle=True)
+    assert marked.unknown == (), f"{text}: {marked.unknown}"

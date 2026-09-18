@@ -20,16 +20,19 @@
 #   HF_TOKEN   必須
 #   STEPS      既定 30000（現行最良と同じ計算量）
 #   SHARDS     評価の並列数。既定 3
-#   ONLY       "kana accent" のうち回すものだけ
+#   ONLY       "kana accent shuffled" のうち回すものだけ
 #
-# **2本を比べる。** (a) 仮名化のみ / (b) 仮名化+核記号。
+# **3本を比べる。** (a) 仮名化のみ / (b) 仮名化+核記号 / (c) 核を偽の位置へ。
 # (b) だけだと「仮名化の効果」と「記号の効果」が混ざる。
+# (c) は**記号が読みに効いた理由**を分ける。記号の数と句の構造は (b) と同一で、
+# 核の位置だけが偽。(c) が (b) 並みなら効いていたのは「区切りがあること」、
+# (a) 並みに戻るなら「アクセントの内容」。
 set -euo pipefail
 
 WORKDIR="${WORKDIR:-/workspace/CuteTTS}"
 STEPS="${STEPS:-30000}"
 SHARDS="${SHARDS:-3}"
-ONLY="${ONLY:-kana accent}"
+ONLY="${ONLY:-kana accent shuffled}"
 
 if [ -z "${HF_TOKEN:-}" ]; then
   echo "HF_TOKEN が要る" >&2
@@ -53,7 +56,7 @@ LINES="$(wc -l < "$MANIFEST")"
 wants() { case " $ONLY " in *" $1 "*) return 0;; *) return 1;; esac; }
 
 # 条件: 名前|frontend
-RUNS=("kana|yomi" "accent|accent")
+RUNS=("kana|yomi" "accent|accent" "shuffled|accent_shuffled")
 
 # ---------------------------------------------------------------- 学習
 for spec in "${RUNS[@]}"; do

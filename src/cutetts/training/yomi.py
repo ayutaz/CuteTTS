@@ -130,7 +130,10 @@ def reading_form(text: str) -> str:
 #: * ``"none"``: 何もしない。**学習の既定**（学習21回すべてこれ）
 #: * ``"yomi"``: J3（語の読み付与）→ J2（漢数字の展開）。**推論の既定**
 #: * ``"accent"``: 全文を片仮名にし、アクセント核に記号を置く（M4a）
-FRONTEND_MODES = ("none", "yomi", "accent")
+#: * ``"accent_shuffled"``: **核の位置を偽の位置へ動かした対照**。記号の数と
+#:   句の構造は `accent` と同じ。読みCERが落ちたままなら効いていたのは
+#:   「区切りがあること」で、戻るなら「アクセントの内容」
+FRONTEND_MODES = ("none", "yomi", "accent", "accent_shuffled")
 
 
 def frontend_text(text: str, mode: str = "none", *,
@@ -152,10 +155,10 @@ def frontend_text(text: str, mode: str = "none", *,
         raise ValueError(f"未知の frontend: {mode}（{FRONTEND_MODES}）")
     if mode == "none":
         return text
-    if mode == "accent":
+    if mode in ("accent", "accent_shuffled"):
         from cutetts.training.accent import accent_marked_text
 
-        return accent_marked_text(text).text
+        return accent_marked_text(text, shuffle=mode == "accent_shuffled").text
     return apply_frontend(text, assigner=assigner, expand_numerals=True)
 
 

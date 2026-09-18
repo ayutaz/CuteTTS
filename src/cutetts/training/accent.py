@@ -50,12 +50,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 
 __all__ = [
     "LONG_VOWEL",
     "NUCLEUS_MARK",
+    "SHUFFLE_SEED",
     "MarkedText",
     "accent_marked_text",
     "kana_of_phonemes",
@@ -66,6 +68,13 @@ NUCLEUS_MARK = "'"
 
 #: 長音記号。直前と同じ母音が続いたときに使う。
 LONG_VOWEL = "ー"
+
+#: 核の位置をずらす対照（`shuffle=True`）の種。
+#:
+#: **記号が読みに効いた理由を切り分けるための対照。** 記号の数と句の構造は
+#: そのままに、**核の位置だけを偽の位置へ動かす**。読みCERが落ちたままなら
+#: 効いていたのは「区切りがあること」で、戻るなら「アクセントの内容」。
+SHUFFLE_SEED = 20260918
 
 _VOWELS = ("a", "i", "u", "e", "o")
 
@@ -238,14 +247,32 @@ def _parse(text: str):
     return phrases, pauses
 
 
+def _shuffled_nucleus(mora_count: int, true_nucleus: int, kana: str) -> int:
+    """核の位置を**偽の位置**へ動かす（対照用）。
+
+    * 記号の数は変えない（`true_nucleus == 0` なら 0 のまま）
+    * 句の長さも変えない（1〜`mora_count - 1` の範囲に収める）
+    * 同じ句には常に同じ偽位置を割り当てる（再現できるようにする）
+    """
+    if true_nucleus == 0 or mora_count < 3:
+        return true_nucleus
+    digest = hashlib.sha256(f"{SHUFFLE_SEED}:{kana}".encode("utf-8")).hexdigest()
+    candidates = [i for i in range(1, mora_count) if i != true_nucleus]
+    if not candidates:
+        return true_nucleus
+    return candidates[int(digest[:8], 16) % len(candidates)]
+
+
 def accent_marked_text(text: str, *, mark: str = NUCLEUS_MARK,
-                       pause: str = "、") -> MarkedText:
+                       pause: str = "、", shuffle: bool = False) -> MarkedText:
     """アクセント核つきの片仮名テキストを作る。
 
     Args:
         text: 元のテキスト。
         mark: 核の直後に置く記号。
         pause: 間（`pau`）の位置に置く記号。
+        shuffle: ``True`` なら**核の位置を偽の位置へ動かす**（対照。
+            記号の数と句の構造は同じまま）。
 
     Returns:
         :class:`MarkedText`。**表に無い音素はローマ字のまま残す**。
@@ -262,6 +289,9 @@ def accent_marked_text(text: str, *, mark: str = NUCLEUS_MARK,
             previous_vowel = None
         # 平板と尾高は句の中では区別できない（`AccentPhrase.internal_nucleus` と同じ規約）
         internal = nucleus if 0 < nucleus < len(mora_list) else 0
+        if shuffle:
+            kana_key = "".join("".join(p) for p in mora_list)
+            internal = _shuffled_nucleus(len(mora_list), internal, kana_key)
         for position, phonemes in enumerate(mora_list, start=1):
             vowel = _vowel_of(phonemes)
             if len(_normalize(phonemes)) == 1 and vowel and vowel == previous_vowel:
