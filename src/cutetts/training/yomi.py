@@ -129,13 +129,16 @@ def reading_form(text: str) -> str:
 #:
 #: * ``"none"``: 何もしない。**学習の既定**（学習21回すべてこれ）
 #: * ``"yomi"``: J3（語の読み付与）→ J2（漢数字の展開）。**推論の既定**
+#: * ``"kana_full"``: **全文を片仮名にするが記号は置かない。** `accent` から
+#:   記号だけを抜いた対照。`yomi` は漢字を 18.16% → 14.65% しか減らさない
+#:   （`accent` は 0%）ので、`yomi` との差には仮名化の効果が混ざる
 #: * ``"accent"``: 全文を片仮名にし、アクセント核に記号を置く（M4a）
 #: * ``"accent_clean"``: `accent` と同じだが、**語境界をまたぐ長音化を止める**。
 #:   `コトモーシエテ` ではなく `コトモオシエテ`（実測で約4,400箇所/20,000文）
 #: * ``"accent_shuffled"``: **核の位置を偽の位置へ動かした対照**。記号の数と
 #:   句の構造は `accent` と同じ。読みCERが落ちたままなら効いていたのは
 #:   「区切りがあること」で、戻るなら「アクセントの内容」
-FRONTEND_MODES = ("none", "yomi", "accent", "accent_shuffled",
+FRONTEND_MODES = ("none", "yomi", "kana_full", "accent", "accent_shuffled",
                   "accent_clean")
 
 
@@ -158,11 +161,12 @@ def frontend_text(text: str, mode: str = "none", *,
         raise ValueError(f"未知の frontend: {mode}（{FRONTEND_MODES}）")
     if mode == "none":
         return text
-    if mode in ("accent", "accent_shuffled", "accent_clean"):
-        from cutetts.training.accent import accent_marked_text
+    if mode in ("kana_full", "accent", "accent_shuffled", "accent_clean"):
+        from cutetts.training.accent import NUCLEUS_MARK, accent_marked_text
 
         return accent_marked_text(
             text,
+            mark="" if mode == "kana_full" else NUCLEUS_MARK,
             shuffle=mode == "accent_shuffled",
             merge_across_words=mode != "accent_clean",
         ).text

@@ -26,6 +26,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from cutetts.training.reading import expand_kanji_numerals
 from cutetts.training.yomi import apply_frontend
 
@@ -89,3 +91,42 @@ def test_J3を2回掛けると壊れる():
     once = apply_frontend("価格は千二百八十円です。", assigner=stub)
     assert "八ジュウ" not in once
     assert "八ジュウ" in stub.apply(once)
+
+
+# ---------------------------------------------------------------- 仮名化の分離
+#
+# **`yomi` は「仮名化」ではない。** J3 は byte-fallback を含む語だけを
+# 置換するので、評価set 200文の実測で漢字は 18.16% → 14.65% しか減らない
+# （`accent` は 0%）。`accent` と `yomi` の差には**仮名化の効果**が混ざる。
+# `kana_full` はその分離のための対照（全文仮名・記号なし）。
+
+
+def test_kana_fullは記号を置かない():
+    pytest.importorskip("pyopenjtalk", reason="[ja] extra が要る")
+    from cutetts.training.accent import NUCLEUS_MARK
+    from cutetts.training.yomi import frontend_text
+
+    text = "箸を持つ手と、橋を渡る足。"
+    assert NUCLEUS_MARK not in frontend_text(text, "kana_full")
+    assert NUCLEUS_MARK in frontend_text(text, "accent")
+
+
+def test_kana_fullはaccentから記号を抜いたものと同じ():
+    pytest.importorskip("pyopenjtalk", reason="[ja] extra が要る")
+    from cutetts.training.accent import NUCLEUS_MARK
+    from cutetts.training.yomi import frontend_text
+
+    text = "明日の待ち合わせは、駅の南口で大丈夫ですか。"
+    assert frontend_text(text, "kana_full") == \
+        frontend_text(text, "accent").replace(NUCLEUS_MARK, "")
+
+
+def test_yomiは漢字を全部消さない():
+    """**「仮名化のみ」と書いてはいけない。** J3 の対象は fallback を含む語だけ。"""
+    pytest.importorskip("pyopenjtalk", reason="[ja] extra が要る")
+    from cutetts.training.yomi import frontend_text
+
+    text = "良い子と友達になりましたね。"
+    assert any("一" <= ch <= "鿿" for ch in frontend_text(text, "yomi"))
+    assert not any("一" <= ch <= "鿿"
+                   for ch in frontend_text(text, "kana_full"))
