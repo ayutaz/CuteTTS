@@ -78,7 +78,7 @@ from cutetts.training.prosody import (  # noqa: E402
     semitone_contour,
     track_f0,
 )
-from cutetts.training.yomi import apply_frontend  # noqa: E402
+from cutetts.training.yomi import FRONTEND_MODES, apply_frontend, frontend_text  # noqa: E402
 
 
 def resolve_device(name: str) -> torch.device:
@@ -146,6 +146,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-decode-length", type=int, default=400)
     parser.add_argument("--expand-numerals", action="store_true",
                         help="J2（漢数字の読み展開）を掛けてから合成する")
+    parser.add_argument("--frontend", choices=FRONTEND_MODES,
+                        help="frontend をまとめて指定する（M4a）。"
+                             "指定すると --expand-numerals / --assign-yomi より優先する")
     parser.add_argument("--assign-yomi", action="store_true",
                         help="J3（語の読み付与）を掛けてから合成する")
     parser.add_argument("--no-accent", action="store_true",
@@ -292,7 +295,7 @@ def main() -> None:
 
     model = CuteTTS.from_pretrained(args.model_dir, device=str(device))
     assigner = None
-    if args.assign_yomi:
+    if args.assign_yomi or args.frontend == "yomi":
         from cutetts.training.yomi import ReadingAssigner
 
         assigner = ReadingAssigner.from_model_dir(args.model_dir)
@@ -324,9 +327,12 @@ def main() -> None:
     for index in indices:
         item = items[index]
         text = item["text"]
-        # **J3 → J2 の順**（逆にすると数詞が壊れる。`yomi.apply_frontend`）
-        spoken = apply_frontend(text, assigner=assigner,
-                                expand_numerals=args.expand_numerals)
+        if args.frontend:
+            spoken = frontend_text(text, args.frontend, assigner=assigner)
+        else:
+            # **J3 → J2 の順**（逆にすると数詞が壊れる。`yomi.apply_frontend`）
+            spoken = apply_frontend(text, assigner=assigner,
+                                    expand_numerals=args.expand_numerals)
         if assigner is not None:
             spoken = assigner.apply(spoken)
         reference = audio_dir / item["reference_wav"]

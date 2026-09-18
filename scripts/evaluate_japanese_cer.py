@@ -41,7 +41,8 @@ from cutetts import CuteTTS
 from cutetts.training import artifacts
 from cutetts.training.evalstats import summarize_subsets
 from cutetts.training.reading import to_arabic_numerals
-from cutetts.training.yomi import ReadingAssigner, apply_frontend, reading_form
+from cutetts.training.yomi import (FRONTEND_MODES, ReadingAssigner, apply_frontend,
+                                   frontend_text, reading_form)
 
 ASR_MODEL = "kotoba-tech/kotoba-whisper-v2.0"
 _PUNCT = re.compile(r"[\s、。「」『』・…‥！？!?,.\-―ー~〜\"'()（）]")
@@ -115,6 +116,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-decode-length", type=int, default=400)
     parser.add_argument("--label", default="baseline", help="artifactに残す識別名")
+    parser.add_argument("--frontend", choices=FRONTEND_MODES,
+                        help="frontend をまとめて指定する（M4a）。"
+                             "**accent は全文を片仮名にして核に記号を置く**。"
+                             "指定すると --expand-numerals / --assign-yomi より優先する")
     parser.add_argument("--assign-yomi", action="store_true",
                         help="生成前に byte-fallback を含む語を読みへ置き換える"
                              "（J3 / D-034）。CERは元のtextに対して測る")
@@ -179,7 +184,8 @@ def main() -> None:
     model = CuteTTS.from_pretrained(args.model_dir, device=str(device))
     asr = Transcriber(device)
     # J3 は tokenizer の語彙を見るので、評価対象の checkpoint から読む
-    yomi = ReadingAssigner.from_model_dir(args.model_dir) if args.assign_yomi else None
+    needs_yomi = args.assign_yomi or args.frontend == "yomi"
+    yomi = ReadingAssigner.from_model_dir(args.model_dir) if needs_yomi else None
     print(f"model: {args.model_dir} (variant={model.variant})")
     print(f"eval set: {args.eval_set}  checksum {artifacts.file_checksum(args.eval_set)[:16]}...")
 
@@ -215,9 +221,13 @@ def main() -> None:
             text = item["text"]
             # **CERは元のtextに対して測る。** 展開するのは生成への入力だけなので、
             # 展開なしの実行とそのまま比較できる。
-            # **J3 → J2 の順**（逆にすると数詞が壊れる。`yomi.apply_frontend`）
-            spoken = apply_frontend(text, assigner=yomi,
-                                    expand_numerals=args.expand_numerals)
+            if args.frontend:
+                # **学習と同じ frontend を通す**（M4a）
+                spoken = frontend_text(text, args.frontend, assigner=yomi)
+            else:
+                # **J3 → J2 の順**（逆にすると数詞が壊れる。`yomi.apply_frontend`）
+                spoken = apply_frontend(text, assigner=yomi,
+                                        expand_numerals=args.expand_numerals)
             if yomi is not None:
                 spoken = yomi.apply(spoken)
             try:

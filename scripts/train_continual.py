@@ -58,6 +58,7 @@ from cutetts.training.manifest import Utterance, load_manifest
 from cutetts.training.objectives import ConditionDropoutConfig
 from cutetts.training.pairing import PairSampler, assert_no_leakage
 from cutetts.training.prompt import build_voice_clone_prompt
+from cutetts.training.yomi import FRONTEND_MODES, frontend_text
 from cutetts.training.speaker_cache import SpeakerEmbeddingCacheReader
 
 
@@ -124,7 +125,7 @@ def cosine_lr(step: int, *, peak: float, warmup: int, total: int, floor_ratio: f
 
 
 def build_batch(pairs, *, source, speaker_reader, processor, max_length,
-                max_target_patches):
+                max_target_patches, frontend="none", assigner=None):
     """ペア列から `TrainingBatch` と speaker tensor を作る。作れなければ ``None``。"""
     samples, speakers = [], []
     for pair in pairs:
@@ -134,7 +135,10 @@ def build_batch(pairs, *, source, speaker_reader, processor, max_length,
         )[:REFERENCE_PATCH_CAP]
         if target.shape[0] < 2:
             continue
-        prompt = build_voice_clone_prompt(processor, pair.target.text_raw)
+        # **学習と推論で同じ frontend を通す**（既定は現状維持の "none"）。
+        # 長らく text_raw のままで、推論の J2/J3 と 29.9% の文で食い違っていた
+        spoken = frontend_text(pair.target.text_raw, frontend, assigner=assigner)
+        prompt = build_voice_clone_prompt(processor, spoken)
         # 系列長が max_length を超えないよう target を切る
         budget = max_length - prompt.text_token_count - 1 - int(reference.shape[0])
         if budget < 2:
@@ -191,6 +195,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--speaker-cache", default="data/cache/speaker")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--dtype", default="bfloat16")
+    parser.add_argument("--frontend", default="none", choices=FRONTEND_MODES,
+                        help="学習テキストに掛ける frontend（M4a）。"
+                             "**既定は none で、学習21回すべてこれだった**。"
+                             "推論側と同じ値を使うこと（食い違うと条件が変わる）。"
+                             "accent は全文を片仮名にしてアクセント核に記号を置く")
     parser.add_argument("--trainable", default=",".join(TRAINABLE_MODULES),
                         help="学習する子moduleをカンマ区切りで指定する（T2）。"
                              "既定は6 module全部。**R-020以前は実質 head だけが"
@@ -316,9 +325,20 @@ def main() -> None:
                if args.condition_dropout > 0 else None)
 
     # dev の固定バッチ。学習ループの損失だけでは成否を判断できない（D-025）。
+    # **frontend は学習と推論で同じものを通す**（M4a）。`yomi` だけ語彙が要る
+    frontend_assigner = None
+    if args.frontend == "yomi":
+        from cutetts.training.yomi import ReadingAssigner
+
+        frontend_assigner = ReadingAssigner.from_model_dir(args.model_dir)
+    if args.frontend != "none":
+        sample = frontend_text(records[0].text_raw, args.frontend,
+                              assigner=frontend_assigner)
+        print(f"frontend={args.frontend}  例: {records[0].text_raw} → {sample}")
     build_kwargs = dict(source=source, speaker_reader=speaker_reader,
                         processor=processor, max_length=max_length,
-                        max_target_patches=args.max_target_patches)
+                        max_target_patches=args.max_target_patches,
+                        frontend=args.frontend, assigner=frontend_assigner)
     eval_sets: dict[str, list] = {}
     if args.eval_every:
         for split in ("dev-seen", "dev-zero-shot"):
@@ -367,9 +387,7 @@ def main() -> None:
         pairs = list(islice(pair_stream, args.batch_size))
         assert_no_leakage(pairs)
 
-        built = build_batch(pairs, source=source, speaker_reader=speaker_reader,
-                            processor=processor, max_length=max_length,
-                            max_target_patches=args.max_target_patches)
+        built = build_batch(pairs, **build_kwargs)
         if built is None:
             continue
         batch, speaker_tensor = built

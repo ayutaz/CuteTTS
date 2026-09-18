@@ -125,6 +125,40 @@ def reading_form(text: str) -> str:
         c for c in to_hiragana("".join(parts)) if c not in _PUNCT_FOR_READING)
 
 
+#: frontend の種類。**学習と推論で同じ値を使う**（食い違うと条件が変わる）。
+#:
+#: * ``"none"``: 何もしない。**学習の既定**（学習21回すべてこれ）
+#: * ``"yomi"``: J3（語の読み付与）→ J2（漢数字の展開）。**推論の既定**
+#: * ``"accent"``: 全文を片仮名にし、アクセント核に記号を置く（M4a）
+FRONTEND_MODES = ("none", "yomi", "accent")
+
+
+def frontend_text(text: str, mode: str = "none", *,
+                  assigner: "ReadingAssigner | None" = None) -> str:
+    """`mode` に従って frontend を掛ける。**学習と推論の共通入口。**
+
+    **学習は長らく `text_raw` をそのまま使っていた**（`mode="none"`）。
+    一方で推論は J2/J3 を掛けるので、**学習データの 29.9% の文で表記が
+    食い違っていた**（2026-09-18 実測）。J2/J3 が再学習なしで効いたのは
+    仮名が学習分布の中にあるからで、**新しい記号は分布に無いので
+    学習側にも同じ frontend を通さないと効かない**（M4a）。
+
+    Args:
+        text: 元のテキスト。
+        mode: :data:`FRONTEND_MODES` のいずれか。
+        assigner: ``"yomi"`` で使う。``None`` なら読み付与を飛ばす。
+    """
+    if mode not in FRONTEND_MODES:
+        raise ValueError(f"未知の frontend: {mode}（{FRONTEND_MODES}）")
+    if mode == "none":
+        return text
+    if mode == "accent":
+        from cutetts.training.accent import accent_marked_text
+
+        return accent_marked_text(text).text
+    return apply_frontend(text, assigner=assigner, expand_numerals=True)
+
+
 def apply_frontend(text: str, *, assigner: "ReadingAssigner | None" = None,
                    expand_numerals: bool = True) -> str:
     """読み付与（J3）→ 漢数字の展開（J2）の順で frontend を掛ける。
