@@ -130,3 +130,28 @@ def test_yomiは漢字を全部消さない():
     assert any("一" <= ch <= "鿿" for ch in frontend_text(text, "yomi"))
     assert not any("一" <= ch <= "鿿"
                    for ch in frontend_text(text, "kana_full"))
+
+
+def test_kana_full_cleanは記号なしで長音化を直す():
+    """**効いているのは片仮名の忠実さ**（R-047）なので、その欠陥を直す版。
+
+    記号は入れず、語境界をまたぐ長音化だけを止める。
+    """
+    pytest.importorskip("pyopenjtalk", reason="[ja] extra が要る")
+    from cutetts.training.accent import NUCLEUS_MARK
+    from cutetts.training.yomi import frontend_text
+
+    text = "その目で見たことを、そのまま言え"
+    clean = frontend_text(text, "kana_full_clean")
+    assert NUCLEUS_MARK not in clean
+    assert "コトオ" in clean
+    assert "コトー" not in clean
+    # 記号を抜いた `accent_clean` と一致する
+    assert clean == frontend_text(text, "accent_clean").replace(NUCLEUS_MARK, "")
+
+
+def test_kana_full_cleanは語の中の長音を残す():
+    pytest.importorskip("pyopenjtalk", reason="[ja] extra が要る")
+    from cutetts.training.yomi import frontend_text
+
+    assert "ショーヒゼー" in frontend_text("消費税込みです。", "kana_full_clean")
