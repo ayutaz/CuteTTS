@@ -30,6 +30,7 @@ Example:
 """
 
 import math
+from typing import Callable
 import queue
 import threading
 from collections.abc import Callable
@@ -68,6 +69,17 @@ class NaiveInferConfig:
     batch_lm_cfg_decode: bool = False
     static_lm_cache: bool = False
     compile_lm_decode: bool = False
+    extra_step_embedding: "Callable[[int], torch.Tensor] | None" = None
+    """Per-step conditioning added to the LM input (M4c).
+
+    Called with the 0-based index of the patch about to be predicted and must
+    return a tensor broadcastable to ``[1, 1, D]``. It is added to the *last*
+    position of the conditional branch only, so LM-level CFG amplifies it the
+    same way it amplifies the text and speaker condition.
+
+    Returning ``None`` skips that step. The unconditional branch is left
+    untouched.
+    """
 
     def __post_init__(self):
         assert self.cfg_mode in {'nocfg', 'lm'}
@@ -332,6 +344,34 @@ def _update_audio_dit_previous_cond(
     if previous_cond is None:
         return None
     return pred_latent.to(dtype=previous_cond.dtype)
+
+
+def _with_step_conditioning(config, embeds, step: int):
+    """Add per-step conditioning to the last position of ``embeds`` (M4c).
+
+    The LM hidden state at the last position predicts patch ``step``, so the
+    conditioning for patch ``step`` must be present in the input that produces
+    it. Adding it one position later would describe a patch that has already
+    been emitted, which carries no control.
+
+    The same tensor feeds both the conditional and unconditional branches, so
+    CFG neither amplifies nor cancels this term: it is shared context rather
+    than a guided condition.
+    """
+    hook = getattr(config, "extra_step_embedding", None)
+    if hook is None:
+        return embeds
+    extra = hook(int(step))
+    if extra is None:
+        return embeds
+    extra = extra.reshape(1, 1, -1).to(device=embeds.device, dtype=embeds.dtype)
+    if extra.size(-1) != embeds.size(-1):
+        raise ValueError(
+            f"extra_step_embedding returned width {extra.size(-1)}, "
+            f"expected {embeds.size(-1)}.")
+    updated = embeds.clone()
+    updated[:, -1:, :] = updated[:, -1:, :] + extra
+    return updated
 
 
 def _stop_after_current_patch(lm: CuteTTSModel, hidden: torch.Tensor) -> bool:
@@ -851,6 +891,8 @@ def _naive_ar_infer_impl(
 
 
     prefill_started = start_stage(stage_profiler)
+    # M4c: patch 0 の条件は prefix の**最後の位置**へ足す
+    prefix_embeds = _with_step_conditioning(config, prefix_embeds, 0)
     state.ar_position_ids[:] = Tprefix
     state.ar_position_ids = state.ar_position_ids.to(lm.device)
     lm_outputs = lm.forward_lm(
@@ -1020,7 +1062,9 @@ def _naive_ar_infer_impl(
             )
 
         acoustic_embed = lm.embed_acoustic_latents(_latent_sequence_for_lm(pred_latent).to(dtype=acoustic_connector_dtype))
-        input_embeds = acoustic_embed
+        # M4c: 次に出す patch の条件を足す（この入力から作る hidden が
+        # patch idx_step + 1 を予測する）
+        input_embeds = _with_step_conditioning(config, acoustic_embed, idx_step + 1)
 
         lm_decode_started = start_stage(stage_profiler)
         if config.batch_lm_cfg_decode:

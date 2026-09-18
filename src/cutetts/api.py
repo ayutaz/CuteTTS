@@ -126,7 +126,15 @@ class CuteTTS:
         seed: int = 42,
         show_progress: bool = True,
         pcm_chunk_callback: Callable[[torch.Tensor], None] | None = None,
+        extra_step_embedding: Callable[[int], torch.Tensor] | None = None,
     ) -> GenerationResult:
+        """``extra_step_embedding`` は patch ごとの追加条件（M4c）。
+
+        呼ばれる引数は**これから出す patch の番号**（0始まり）で、
+        返り値は ``[1, 1, D]`` にブロードキャストできる tensor。
+        ``None`` を返した step は素通りする。**条件と patch の対応が
+        1つずれると制御にならない**ので、番号の規約を変えないこと。
+        """
         text = str(text).strip()
         if not text:
             raise ValueError("text must not be empty.")
@@ -228,6 +236,7 @@ class CuteTTS:
             max_decode_length=int(max_decode_length),
             diffusion_sway_coefficient=sway,
             distilled_cfg_strength=distilled_cfg,
+            extra_step_embedding=extra_step_embedding,
         )
         result = naive_ar_infer(
             infer_config,

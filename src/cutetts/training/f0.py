@@ -65,6 +65,9 @@ __all__ = [
     "F0Conditioner",
     "f0_features",
     "features_from_waveform",
+    "load_f0_conditioner",
+    "roundtrip_waveform",
+    "step_embedding_hook",
     "frame_f0",
     "patch_features",
     "reference_hz",
@@ -397,3 +400,65 @@ class F0CacheReader:
 
     def __exit__(self, *_exc) -> None:
         self.close()
+
+
+# --- 推論側 ------------------------------------------------------------------
+
+
+def load_f0_conditioner(model_dir: str | Path, device: str = "cpu"
+                        ) -> "F0Conditioner | None":
+    """`inference/f0_conditioner.safetensors` を読む。無ければ ``None``。
+
+    **`inference/weights` には混ぜない。** あちらは `strict=True` で読まれるので、
+    公開checkpointに無いモジュールを置くと読めなくなる。
+    """
+    from safetensors.torch import load_file
+
+    path = Path(model_dir) / "f0_conditioner.safetensors"
+    if not path.is_file():
+        return None
+    state = load_file(str(path))
+    weight = state["proj.weight"]
+    module = F0Conditioner(int(weight.shape[1]), int(weight.shape[0]))
+    module.load_state_dict(state, strict=True)
+    return module.to(device).eval()
+
+
+def roundtrip_waveform(vae, waveform: np.ndarray) -> np.ndarray:
+    """波形を VAE で往復させる。
+
+    **学習側の F0 は latent を decode した波形から取っている。**
+    推論で元の波形から取ると、有声判定が 14% 食い違い 26% のフレームが
+    1半音以上ずれる（実測）。**条件の分布を揃えるために往復させる。**
+    """
+    import torch
+
+    from cutetts.training.latents import encode_waveform
+
+    with torch.no_grad():
+        wave = torch.from_numpy(np.asarray(waveform, dtype=np.float32))
+        latent = encode_waveform(vae, wave)
+        device = next(vae.parameters()).device
+        decoded = vae.decode(latent.T.unsqueeze(0).to(device))
+    return decoded.squeeze().float().cpu().numpy().astype(np.float64)
+
+
+def step_embedding_hook(conditioner, patches, *, device: str = "cpu"):
+    """patch ごとの条件を返す hook（`api.generate(extra_step_embedding=)` 用）。
+
+    ``patches`` は ``[N, patch_size * 2]``。範囲を越えた step は ``None`` を
+    返して素通りさせる（**条件を繰り返すと、無い高さを指定し続けることになる**）。
+    """
+    import torch
+
+    if conditioner is None or patches is None or len(patches) == 0:
+        return None
+    tensor = torch.as_tensor(np.asarray(patches, dtype=np.float32), device=device)
+
+    def hook(step: int):
+        if step < 0 or step >= tensor.shape[0]:
+            return None
+        with torch.no_grad():
+            return conditioner(tensor[step:step + 1])
+
+    return hook

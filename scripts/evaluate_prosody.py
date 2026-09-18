@@ -136,6 +136,37 @@ def _accent(aligner, text, human_wave, human_rate, human_f0,
     return {"accent": {"expected": expected, "human": human, "model": model}}
 
 
+def _f0_hook(path: Path, conditioner, vae, patch_size: int, device: str):
+    """1発話ぶんの F0 条件を作る（M4c）。
+
+    **`num_patches` は与える音声の長さから決める。** 生成がそれより長く
+    続いた step は `None` を返して素通りさせる（条件を繰り返すと、
+    存在しない高さを指定し続けることになる）。
+    """
+    from cutetts.training.f0 import (
+        features_from_waveform,
+        patch_features,
+        roundtrip_waveform,
+        step_embedding_hook,
+    )
+    from cutetts.training.latents import LATENT_SAMPLE_RATE
+
+    wave, rate = read_audio(path)
+    if rate != LATENT_SAMPLE_RATE:
+        import torchaudio
+
+        wave = torchaudio.functional.resample(
+            torch.from_numpy(wave).float(), rate, LATENT_SAMPLE_RATE).numpy()
+    if vae is not None:
+        wave = roundtrip_waveform(vae, wave)
+    features = features_from_waveform(np.asarray(wave, dtype=np.float64),
+                                      LATENT_SAMPLE_RATE)
+    num_patches = max(1, -(-len(features) // patch_size))
+    patches = patch_features(features, patch_size=patch_size,
+                             num_patches=num_patches)
+    return step_embedding_hook(conditioner, patches, device=device)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="抑揚を測る（M1）")
     parser.add_argument("--model-dir")
@@ -151,6 +182,13 @@ def build_parser() -> argparse.ArgumentParser:
                              "指定すると --expand-numerals / --assign-yomi より優先する")
     parser.add_argument("--assign-yomi", action="store_true",
                         help="J3（語の読み付与）を掛けてから合成する")
+    parser.add_argument("--f0-source", default="none",
+                        choices=("none", "oracle", "transfer"),
+                        help="F0 の条件（M4c）。oracle はその文自身の人間音声、"
+                             "transfer は同じ台詞の別テイク（天井setのみ）")
+    parser.add_argument("--no-f0-roundtrip", action="store_true",
+                        help="F0 を取る前に VAE で往復させない。**既定は往復させる**"
+                             "（学習側の F0 は decode 由来なので分布を揃える）")
     parser.add_argument("--no-accent", action="store_true",
                         help="アクセント核の測定を行わない（強制アラインメントを"
                              "省く）。初回は 1.18 GB のモデルを取得する")
@@ -211,7 +249,10 @@ def write_metrics(run_dir, args, summary: dict, rows: list[dict]) -> None:
         "eval_set": str(args.eval_set),
         "eval_set_sha256": artifacts.file_checksum(args.eval_set),
         "settings": {"seed": args.seed, "expand_numerals": args.expand_numerals,
-                     "assign_yomi": args.assign_yomi},
+                     "assign_yomi": args.assign_yomi,
+                     "frontend": args.frontend,
+                     "f0_source": args.f0_source,
+                     "f0_roundtrip": not args.no_f0_roundtrip},
         "shard": args.shard, "merged_from": args.merge,
         "summary": summary, "rows": rows,
     })
@@ -300,6 +341,29 @@ def main() -> None:
 
         assigner = ReadingAssigner.from_model_dir(args.model_dir)
 
+    # M4c: F0 の条件。**conditioner が無ければ黙って素通りさせない**
+    f0_conditioner = None
+    f0_vae = None
+    patch_size = 2
+    if args.f0_source != "none":
+        from cutetts.training.f0 import load_f0_conditioner
+
+        f0_conditioner = load_f0_conditioner(args.model_dir, device=str(device))
+        if f0_conditioner is None:
+            raise SystemExit(
+                f"--f0-source={args.f0_source} だが "
+                f"{args.model_dir}/f0_conditioner.safetensors が無い")
+        if not args.no_f0_roundtrip:
+            from cutetts.modeling.audio_adapter import AudioAcousticVAEAdapter
+
+            f0_vae = AudioAcousticVAEAdapter(
+                Path(args.model_dir) / "weights" / "audio_vae").to(device).eval()
+        patch_size = int(json.loads(
+            (Path(args.model_dir) / "config.json").read_text(encoding="utf-8")
+        )["architecture"]["locenc_patch_size"])
+        print(f"F0 条件: {args.f0_source}"
+              f"（往復 {'なし' if args.no_f0_roundtrip else 'あり'} / patch {patch_size}）")
+
     aligner = None
     if not args.no_accent:
         # アラインメントのモデルは初回のみ 1.18 GB を取得する
@@ -338,11 +402,22 @@ def main() -> None:
         # 戻る（`マコトニ` → `マコト二`、`さんじゅうご` → `さんジュウゴ`）。
         # 実測で prosody set 240文のうち2文（0.8%）が壊れていた。
         reference = audio_dir / item["reference_wav"]
+        f0_hook = None
+        if f0_conditioner is not None:
+            source_key = ("human_wav" if args.f0_source == "oracle"
+                          else "take_b_wav")
+            if not item.get(source_key):
+                rows.append({"index": index, "text": text, "status": "error",
+                             "detail": f"{source_key} が無い（--f0-source"
+                                       f"={args.f0_source}）"})
+                continue
+            f0_hook = _f0_hook(audio_dir / item[source_key], f0_conditioner,
+                               f0_vae, patch_size, str(device))
         try:
             result = model.generate(
                 spoken, mode="voice_clone", reference_audio=str(reference),
                 seed=args.seed, max_decode_length=args.max_decode_length,
-                show_progress=False,
+                show_progress=False, extra_step_embedding=f0_hook,
             )
         except Exception as error:                 # 失敗も記録して先へ進む
             rows.append({"index": index, "text": text, "status": "error",

@@ -204,3 +204,47 @@ def test_全部無声なら空():
     from cutetts.training.prosody import time_aligned_contour
 
     assert time_aligned_contour(np.zeros(5)).size == 0
+
+
+# ---------------------------------------------------------------- 推論側の配線
+
+
+@pytest.mark.slow
+def test_zero_initの条件は生成を変えない():
+    """**実 checkpoint での回帰。** 配線がずれていれば出力が変わる。
+
+    `checkpoints/m4a-accent/inference` で実測（CPU、24 patch）:
+    hook は 0,1,2,… の順に呼ばれ、**波形は完全一致**した。
+    """
+    from pathlib import Path
+
+    model_dir = Path("checkpoints/m4a-accent/inference")
+    if not model_dir.is_dir():
+        pytest.skip("実 checkpoint が無い")
+    reference = sorted(Path("data/eval/prosody_audio").glob("*.wav"))
+    if not reference:
+        pytest.skip("参照音声が無い")
+
+    from cutetts import CuteTTS
+    from cutetts.training.f0 import F0_FEATURE_DIM, F0Conditioner, step_embedding_hook
+
+    model = CuteTTS.from_pretrained(str(model_dir), device="cpu")
+    text = "ソノカ'ミオミテイマシタ。"
+    kwargs = dict(mode="voice_clone", reference_audio=str(reference[0]),
+                  seed=42, max_decode_length=16, show_progress=False)
+
+    plain = model.generate(text, **kwargs)
+    conditioner = F0Conditioner(F0_FEATURE_DIM * 2, 1024)
+    patches = np.zeros((32, F0_FEATURE_DIM * 2), dtype=np.float32)
+    seen: list[int] = []
+
+    hook = step_embedding_hook(conditioner, patches, device="cpu")
+
+    def counting(step: int):
+        seen.append(step)
+        return hook(step)
+
+    conditioned = model.generate(text, **kwargs, extra_step_embedding=counting)
+
+    assert seen[:4] == [0, 1, 2, 3]          # **0始まりで1つずつ**
+    assert torch.equal(plain.waveform, conditioned.waveform)
