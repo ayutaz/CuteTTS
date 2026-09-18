@@ -105,3 +105,53 @@ def test_invalid_patch_size_is_rejected():
 def test_rejects_non_2d_input():
     with pytest.raises(ValueError):
         to_patches(torch.zeros(2, 4, DIM), patch_size=2)
+
+
+# ---------------------------------------------------------------- F0Source（M4c）
+#
+# **target は2回切られる**（`max_target_patches` と系列長の予算）。
+# 切り終わった長さに合わせて作らないと、条件と patch が1つずれる。
+
+
+class _FakeF0Reader:
+    def __init__(self, frames):
+        import torch as _torch
+
+        self._frames = _torch.tensor(frames, dtype=_torch.float32)
+
+    def __contains__(self, utterance_id):
+        return utterance_id == "u0"
+
+    def read(self, utterance_id):
+        if utterance_id != "u0":
+            raise KeyError(utterance_id)
+        return self._frames
+
+
+def test_F0Sourceは指定したpatch数で返す():
+    from cutetts.training.dataset import F0Source
+
+    reader = _FakeF0Reader([[1.0, 0.1], [1.0, 0.2], [1.0, 0.3], [1.0, 0.4],
+                            [0.0, 0.0], [1.0, 0.6]])
+    source = F0Source(reader=reader, patch_size=2)
+    out = source.patches("u0", 2)
+    assert tuple(out.shape) == (2, 4)
+    assert out[0].tolist() == pytest.approx([1.0, 0.1, 1.0, 0.2])
+    assert out[1].tolist() == pytest.approx([1.0, 0.3, 1.0, 0.4])  # 3つ目は捨てる
+
+
+def test_F0Sourceは足りない分をゼロで埋める():
+    from cutetts.training.dataset import F0Source
+
+    source = F0Source(reader=_FakeF0Reader([[1.0, 0.1], [1.0, 0.2]]),
+                      patch_size=2)
+    out = source.patches("u0", 2)
+    assert out[1].tolist() == [0.0, 0.0, 0.0, 0.0]
+
+
+def test_F0Sourceは在庫を判定できる():
+    from cutetts.training.dataset import F0Source
+
+    source = F0Source(reader=_FakeF0Reader([[1.0, 0.0]]), patch_size=2)
+    assert "u0" in source
+    assert "u1" not in source

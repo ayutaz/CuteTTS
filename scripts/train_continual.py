@@ -230,6 +230,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dtype", default="bfloat16")
     parser.add_argument("--f0-cache",
                         help="F0 cache（M4c）。渡すと F0 の条件を学習する")
+    parser.add_argument("--f0-lr", type=float,
+                        help="F0 条件だけの学習率。省略すると本体と同じ。"
+                             "**zero-init から作るので本体より大きくてよい**")
     parser.add_argument("--frontend", default="none", choices=FRONTEND_MODES,
                         help="学習テキストに掛ける frontend（M4a）。"
                              "**既定は none で、学習21回すべてこれだった**。"
@@ -324,9 +327,11 @@ def main() -> None:
         f0_conditioner = f0_conditioner.to(torch.float32)
         f0_reader = F0CacheReader(args.f0_cache)
         f0_source = F0Source(reader=f0_reader, patch_size=patch)
-        trainable += list(f0_conditioner.parameters())
+        f0_params = list(f0_conditioner.parameters())
+        trainable += f0_params
         print(f"F0 条件: {len(f0_reader):,} 発話 / "
-              f"{F0_FEATURE_DIM * patch} → {hidden}（zero-init）")
+              f"{F0_FEATURE_DIM * patch} → {hidden}（zero-init）"
+              f" lr={args.f0_lr if args.f0_lr else args.lr:g}")
     print(f"trainable parameters: {sum(p.numel() for p in trainable)/1e6:.1f}M"
           f"  ({', '.join(trainable_names)})")
     if frozen:
@@ -371,8 +376,23 @@ def main() -> None:
     # stream を1本持って、そこから順に引くこと。
     pair_stream = sampler.iter_pairs()
 
-    optimizer = torch.optim.AdamW(trainable, lr=args.lr, betas=(0.9, 0.95),
-                                  weight_decay=args.weight_decay)
+    # **zero-init の新しいモジュールは別の学習率にできる**（M4c）。
+    # 既存の重みは公開checkpointからの微調整なので 2e-5 が底だが（T1）、
+    # F0 条件は 0 から作るので同じ率だと動き出しが遅い。
+    # **既定は本体と同じ**にしてあり、`--f0-lr` を渡したときだけ分ける。
+    if f0_conditioner is not None and args.f0_lr:
+        f0_ids = {id(p) for p in f0_conditioner.parameters()}
+        groups = [
+            {"params": [p for p in trainable if id(p) not in f0_ids],
+             "lr": args.lr, "is_f0": False},
+            {"params": [p for p in trainable if id(p) in f0_ids],
+             "lr": args.f0_lr, "is_f0": True},
+        ]
+        optimizer = torch.optim.AdamW(groups, lr=args.lr, betas=(0.9, 0.95),
+                                      weight_decay=args.weight_decay)
+    else:
+        optimizer = torch.optim.AdamW(trainable, lr=args.lr, betas=(0.9, 0.95),
+                                      weight_decay=args.weight_decay)
     state = TrainingState()
     if args.resume and (out_dir / "training_state.pt").is_file():
         state = load_training_state(out_dir, model=model, optimizer=optimizer,
@@ -455,7 +475,10 @@ def main() -> None:
 
         lr = cosine_lr(step, peak=args.lr, warmup=args.warmup, total=args.steps)
         for group in optimizer.param_groups:
-            group["lr"] = lr
+            # F0 条件だけ別の率で回す（`--f0-lr`）。同じ形の cosine を掛ける
+            peak = args.f0_lr if group.get("is_f0") else args.lr
+            group["lr"] = cosine_lr(step, peak=peak, warmup=args.warmup,
+                                    total=args.steps)
 
         optimizer.zero_grad(set_to_none=True)
         out = training_forward(model, batch, speaker_embeddings=speaker_tensor,
