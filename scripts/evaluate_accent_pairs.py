@@ -213,13 +213,22 @@ def summarize(rows: list[dict]) -> dict:
 
 
 def write_metrics(run_dir, args, summary: dict, rows: list[dict]) -> None:
-    artifacts.write_run_metadata(run_dir, label=args.label,
-                                 settings=vars(args))
+    """metrics.json を書く。**shardでも結合でも同じ形にする。**"""
+    artifacts.write_run_metadata(
+        run_dir, phase="a1-accent-pairs",
+        command=[Path(sys.argv[0]).name] + sys.argv[1:], seed=args.seed,
+        inputs={"model_dir": args.model_dir, "eval_set": args.eval_set},
+    )
     artifacts.write_metrics(run_dir, {
+        "phase": "a1-accent-pairs",
         "label": args.label,
+        "model_dir": str(args.model_dir),
         "frontend": args.frontend,
-        "eval_set": args.eval_set,
+        "eval_set": str(args.eval_set),
         "eval_set_sha256": artifacts.file_checksum(args.eval_set),
+        "settings": {"seed": args.seed, "repeats": args.repeats,
+                     "reference_audio": args.reference_audio},
+        "shard": args.shard, "merged_from": args.merge,
         "summary": summary,
         "rows": rows,
     })
@@ -306,16 +315,17 @@ def main() -> None:
                     print(f"  生成に失敗: {text} / {error}")
                     observations.append(UNDETERMINED)
                     continue
-                waveform = np.asarray(result.audio, dtype=np.float64)
-                if waveform.ndim > 1:
-                    waveform = waveform.mean(axis=1)
+                # **`.audio` ではない。** `GenerationResult` は `.waveform`
+                # （torch tensor）と `.sample_rate` を持つ
+                waveform = result.waveform.squeeze(0).float().cpu().numpy(
+                    ).astype(np.float64)
                 observations.append(measure_nucleus(
                     aligner, text, waveform, result.sample_rate,
                     item["phrase_index"]))
                 if saved < args.save_samples:
                     sf.write(str(samples_dir / f"{item['pair_id']}-"
                                  f"{variant['surface']}-{repeat}.wav"),
-                             waveform, result.sample_rate)
+                             waveform, result.sample_rate)   # 公開しない
                     saved += 1
             rows.append({
                 "pair_id": item["pair_id"],

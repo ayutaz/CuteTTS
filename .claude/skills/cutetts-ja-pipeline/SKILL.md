@@ -374,6 +374,7 @@ yes | vastai destroy instance <id>
 | `AttributeError: 'GenerationResult' object has no attribute ...` | `tts.generate()` は tensor ではなく `GenerationResult` を返す。`.waveform` と `.sample_rate` を取る |
 | CUDA generator エラー | CPU generator を CUDA device で使った。`objectives._randn` が吸収するが、新しい乱数経路を足すときは同じ扱いにする |
 | **生成したコードが無言で壊れる** | bash heredoc（`<<'PY'` でも）経由でPythonへ渡すと**バックスラッシュが1段落ちる**。`\1` が 0x01 になり正規表現が死に、`'\n'` が生の改行になってJavaScriptが構文エラーになった（**2回踏んだ**）。**生成コードはWriteツールで `.py` に書いてから実行する。** 書き出したら括弧の対応と文字列リテラルを検査する |
+| **待機中の駆動スクリプトを「死んだ」と判定する** | 次のジョブを待っている駆動スクリプトは**GPUもCPUも使わない**。`nvidia-smi` や `train_continual` の有無で生きているかを判定すると見落とし、**同じ checkpoint を2プロセスで学習する**（実際にやった）。**駆動スクリプトはロックファイルで直列化する**（`m4a_factor_split.sh` の `lock_alive`）。確認は `ps -eo pid,args \| grep "[b]ash /workspace"` のように**スクリプト名**で行う |
 | **リモートジョブを二重起動する** | `timeout` で ssh が切れても**リモートプロセスは生き続ける**。死んだと判断して再起動し、GPUを並列で使った（規約違反）。**再起動の前に必ず `ps -eo pid,args \| grep <script>` で生存を確認する** |
 | **実行中のシェルスクリプトを上書きする** | bash はスクリプトを**バイト位置で逐次読む**。行を足すと、次に読む位置が別の行の途中になって壊れる（実測: `line 79: y: command not found` で、学習の後の評価だけが落ちた。学習は完了していたので気づきにくい）。**転送先は別名にして、実行は別名の複製から行う**（`cp run.sh run.running.sh && bash run.running.sh`） |
 | `tail`/`grep` を通した進捗が出ない | パイプがバッファするため、プロセスが終わるまで1行も来ない。ファイルへ落としてから読む |

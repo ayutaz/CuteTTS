@@ -41,6 +41,22 @@ if [ -z "${HF_TOKEN:-}" ]; then
 fi
 cd "$WORKDIR"
 
+# ---------------------------------------------------------------- 二重起動の防止
+# **待機中の駆動スクリプトはGPUを使わない。** そのため `nvidia-smi` や
+# `train_continual` の有無では生存を判定できず、実際に**同じ checkpoint を
+# 2プロセスで学習した**（`m4a-kanafull` を44分と18分、GPUを分け合っていた）。
+# **駆動スクリプトはロックで直列化する。**
+LOCK="${LOCK:-/workspace/m4a-driver.lock}"
+lock_holder() { cat "$LOCK" 2>/dev/null; }
+lock_alive() { [ -f "$LOCK" ] && kill -0 "$(lock_holder)" 2>/dev/null; }
+
+if lock_alive; then
+  echo "別の駆動スクリプトが動いている（PID $(lock_holder)）。何もしない" >&2
+  exit 1
+fi
+echo $$ > "$LOCK"
+trap 'rm -f "$LOCK"' EXIT
+
 MANIFEST="data/s1v2/manifests-v2/all_clustered.jsonl"
 LATENTS="data/s1v2/latents-v2"
 SPEAKERS="data/s1v2/speaker-v2"
@@ -154,6 +170,6 @@ for path in sorted(glob.glob("artifacts/s0-train/*/metrics.json")):
 PYEOF
 
 echo
-echo "完了。基準線は `m4a-accent` 7.58% と `m4a-kana` 11.64%。"
+echo '完了。基準線は m4a-accent 7.58% と m4a-kana 11.64%。'
 echo "  shuffled が 7.6% 付近 → 効いたのは区切り / 11.6% 付近 → 核の内容"
-echo "  kanafull と accent の差が**記号の真の効果**"
+echo '  kanafull と accent の差が **記号の真の効果**'
