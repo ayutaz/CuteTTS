@@ -163,3 +163,47 @@ def test_shuffleは平板に記号を付けない():
 def test_shuffleでも未知の音素が出ない(text):
     marked = accent_marked_text(text, shuffle=True)
     assert marked.unknown == (), f"{text}: {marked.unknown}"
+
+
+# ------------------------------------------------- 語境界をまたぐ長音化（accent_clean）
+#
+# 長音規則は「直前と同じ母音の裸母音」を `ー` にする。この規則は
+# **語境界をまたいでも発火し**、実測（20,000文）で約4,400箇所を潰していた。
+#
+#   コトモ**オ**シエテ → コトモ**ー**シエテ   `教えて` の頭が消える
+#
+# **既定の挙動は変えられない** — 現行最良の checkpoint はこの規則で
+# 学習してあるので、既定を直すと学習と推論が食い違う（F1 の教訓）。
+
+
+def test_既定は語境界をまたいで長音化する():
+    """**回帰の防波堤。** ここが変わると現行 checkpoint の前提が崩れる。"""
+    marked = accent_marked_text("貴官のことも教えていただけませんか？").text
+    assert "コトモーシエテ" in marked
+
+
+def test_cleanは語の先頭で長音化を止める():
+    marked = accent_marked_text("貴官のことも教えていただけませんか？",
+                                merge_across_words=False).text
+    assert "コトモオシエテ" in marked
+    assert "コトモーシエテ" not in marked
+
+
+def test_cleanでも語の中の長音は残る():
+    """`ショーヒゼー` は語の中の長音。**止めてはいけない。**"""
+    marked = accent_marked_text("消費税込みです。", merge_across_words=False).text
+    assert "ショーヒゼー" in marked.replace(NUCLEUS_MARK, "")
+
+
+def test_cleanは核の位置を変えない():
+    """直すのは仮名だけ。アクセントの判定には触らない。"""
+    text = "貴官のことも教えていただけませんか？"
+    assert accent_marked_text(text, merge_across_words=False).marks == \
+        accent_marked_text(text).marks
+
+
+def test_cleanはモーラ数を変えない():
+    """`ー` も1モーラなので、潰れが解けても数は同じ。"""
+    text = "とにかく動かず、静かに、じっと、していろ"
+    assert accent_marked_text(text, merge_across_words=False).moras == \
+        accent_marked_text(text).moras

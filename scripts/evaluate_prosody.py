@@ -333,8 +333,10 @@ def main() -> None:
             # **J3 → J2 の順**（逆にすると数詞が壊れる。`yomi.apply_frontend`）
             spoken = apply_frontend(text, assigner=assigner,
                                     expand_numerals=args.expand_numerals)
-        if assigner is not None:
-            spoken = assigner.apply(spoken)
+        # **J3 をもう一度掛けてはいけない。** `frontend_text` / `apply_frontend`
+        # の中で既に掛かっている。2回掛けると J2 の出力を再解釈して漢数字が
+        # 戻る（`マコトニ` → `マコト二`、`さんじゅうご` → `さんジュウゴ`）。
+        # 実測で prosody set 240文のうち2文（0.8%）が壊れていた。
         reference = audio_dir / item["reference_wav"]
         try:
             result = model.generate(

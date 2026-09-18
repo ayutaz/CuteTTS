@@ -247,6 +247,37 @@ def _parse(text: str):
     return phrases, pauses
 
 
+def _word_start_moras(text: str) -> set[int]:
+    """**語の先頭にあたるモーラの位置**（0始まり・文全体の通し番号）。
+
+    長音規則は「直前と同じ母音の裸母音」を `ー` にするが、この規則は
+    **語境界をまたいでも発火する**。実測（20,000文）で
+
+        コトモ**オ**シエテ  →  コトモ**ー**シエテ   `教えて` の頭が消える
+        トニカク**ウ**ゴカズ →  トニカク**ー**ゴカズ  `動かず` の頭が消える
+
+    のように約4,400箇所が潰れていた。語の先頭では止められるようにする。
+
+    NJD の `mora_size` の累和で境界を出す。ラベル側のモーラ総数と合わない
+    ときは空集合を返す（**黙って別の位置を止めるより、止めない方が安全**）。
+    """
+    import pyopenjtalk
+
+    starts: set[int] = set()
+    total = 0
+    try:
+        features = pyopenjtalk.run_frontend(text)
+    except Exception:
+        return set()
+    for item in features:
+        size = int(item.get("mora_size") or 0)
+        if size <= 0:
+            continue
+        starts.add(total)
+        total += size
+    return starts
+
+
 def _shuffled_nucleus(mora_count: int, true_nucleus: int, kana: str) -> int:
     """核の位置を**偽の位置**へ動かす（対照用）。
 
@@ -264,7 +295,8 @@ def _shuffled_nucleus(mora_count: int, true_nucleus: int, kana: str) -> int:
 
 
 def accent_marked_text(text: str, *, mark: str = NUCLEUS_MARK,
-                       pause: str = "、", shuffle: bool = False) -> MarkedText:
+                       pause: str = "、", shuffle: bool = False,
+                       merge_across_words: bool = True) -> MarkedText:
     """アクセント核つきの片仮名テキストを作る。
 
     Args:
@@ -273,6 +305,10 @@ def accent_marked_text(text: str, *, mark: str = NUCLEUS_MARK,
         pause: 間（`pau`）の位置に置く記号。
         shuffle: ``True`` なら**核の位置を偽の位置へ動かす**（対照。
             記号の数と句の構造は同じまま）。
+        merge_across_words: ``True``（既定）なら語境界をまたいでも同じ母音を
+            長音へ潰す。**既定を変えてはいけない** — 現行最良の checkpoint は
+            この挙動で学習してある。``False`` は `_word_start_moras` を使って
+            語の先頭で止める（`accent_clean`）。
 
     Returns:
         :class:`MarkedText`。**表に無い音素はローマ字のまま残す**。
@@ -282,6 +318,7 @@ def accent_marked_text(text: str, *, mark: str = NUCLEUS_MARK,
     unknown: list[str] = []
     moras = marks = 0
     previous_vowel: str | None = None
+    word_starts: set[int] = set() if merge_across_words else _word_start_moras(text)
 
     for index, (mora_list, nucleus) in enumerate(phrases):
         if index in pauses and parts:
@@ -294,7 +331,8 @@ def accent_marked_text(text: str, *, mark: str = NUCLEUS_MARK,
             internal = _shuffled_nucleus(len(mora_list), internal, kana_key)
         for position, phonemes in enumerate(mora_list, start=1):
             vowel = _vowel_of(phonemes)
-            if len(_normalize(phonemes)) == 1 and vowel and vowel == previous_vowel:
+            if (len(_normalize(phonemes)) == 1 and vowel
+                    and vowel == previous_vowel and moras not in word_starts):
                 kana = LONG_VOWEL
             else:
                 kana = kana_of_phonemes(phonemes)

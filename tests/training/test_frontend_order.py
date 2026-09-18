@@ -76,3 +76,16 @@ def test_数詞が無い文では順序で結果が変わらない():
     forward = apply_frontend("中華料理のお店へ。", assigner=stub_a)
     backward = stub_b.apply(expand_kanji_numerals("中華料理のお店へ。"))
     assert forward == backward
+
+
+def test_J3を2回掛けると壊れる():
+    """**呼び出し側で `assigner.apply` を足してはいけない。**
+
+    `apply_frontend` / `frontend_text` の中で既に J3 が掛かっている。
+    2回目は J2 の出力（仮名列）を再解釈するので、逆順と同じ壊れ方をする。
+    `evaluate_prosody.py` に実際に入っていた（prosody set 240文中2文で発火）。
+    """
+    stub = _StubAssigner()
+    once = apply_frontend("価格は千二百八十円です。", assigner=stub)
+    assert "八ジュウ" not in once
+    assert "八ジュウ" in stub.apply(once)
