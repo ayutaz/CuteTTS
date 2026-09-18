@@ -100,6 +100,13 @@ CER5.4GiB なので3並列が載る。
 
 ## 実行環境とGPUの規約
 
+0. **vast.ai のイメージは Python 3.11。** `pyproject.toml` は
+   `>=3.12,<3.13` を要求するので、`pip install -e .` が
+   `requires a different Python` で落ちる。**uv で 3.12 の venv を作る**:
+   `uv venv --python 3.12 .venv` →
+   `uv pip install --python .venv/bin/python torch==2.5.1 torchaudio==2.5.1
+   --index-url https://download.pytorch.org/whl/cu121` →
+   `uv pip install --python .venv/bin/python -e ".[ja,prosody,eval]"`。
 1. **Python は `uv run --no-sync python`（ユーザー指示。2026-09-19）。**リポジトリルートから実行する。**`--no-sync` を外さない** — `uv run` が pyproject から同期し直して torch 2.5.1+cu121 を入れ替えてしまう。中身は `.venv/Scripts/python.exe` で同じ。
    システム既定は3.14で torch 2.5.1 が動かない（対応は3.9〜3.12）。
 2. **GPUはすべて vast.ai を使う。ローカルGPUは使わない**（D-023 / D-024、2026-09-15）。
@@ -315,6 +322,14 @@ hf download tts-dataset/cutetts-ja-latents --repo-type dataset --local-dir data/
 ```bash
 # bootstrap（リポジトリ取得 + 依存 + checkpoint + テスト）
 ssh -p <port> root@<host> 'bash -s' < scripts/vastai_bootstrap.sh
+
+# **評価setを転送する**（`data/` は gitignore なので bootstrap では入らない）。
+# 忘れると `fetch_prosody_audio.py` が
+# `FileNotFoundError: data/eval/prosody_eval_set_v2.json` で落ちる（実際に踏んだ）
+tar czf - data/eval/*.json | ssh -p <port> root@<host> 'cd /workspace/CuteTTS && tar xzf -'
+
+# **未pushのコミットがあるときは作業ツリーごと送る**（bootstrap は clone するだけ）
+git archive --format=tar HEAD | gzip | ssh -p <port> root@<host> 'cd /workspace/CuteTTS && tar xzf -'
 
 # データ転送（55 MB。scp よりtar over sshが速い）
 tar czf - data/cache/latents data/cache/speaker data/manifests/all_clustered.jsonl   | ssh -p <port> root@<host> 'cd /workspace/CuteTTS && tar xzf -'
