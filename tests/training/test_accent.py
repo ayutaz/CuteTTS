@@ -207,3 +207,48 @@ def test_cleanはモーラ数を変えない():
     text = "とにかく動かず、静かに、じっと、していろ"
     assert accent_marked_text(text, merge_across_words=False).moras == \
         accent_marked_text(text).moras
+
+
+def test_cleanは助動詞の境界では止めない():
+    """**自分で入れた欠陥の回帰（1回目）。**
+
+    `でしょう` は NJD で `でしょ` + `う`（助動詞）に分かれる。語境界で
+    一律に長音化を止めると `デショオ` になる（正しくは `デショー`）。
+    実測で 10,000文中 113箇所がこの形だった。
+    """
+    marked = accent_marked_text("どなた様でしょうか？", merge_across_words=False).text
+    assert "デショー" in marked.replace(NUCLEUS_MARK, "")
+    assert "デショオ" not in marked
+
+
+def test_cleanは助詞のヲを飲み込まない():
+    """**自分で入れた欠陥の回帰（2回目）。**
+
+    1回目の修正で「自立語だけ止める」にしたら、助詞の `を` が飲み込まれて
+    `ことを` が `コトー` になった（正しくは `コトオ`）。`を` は頻出なので
+    実害が大きい。**助動詞だけを許す**のが両方を満たす。
+    """
+    marked = accent_marked_text("その目で見たことを、そのまま言え",
+                                merge_across_words=False).text
+    bare = marked.replace(NUCLEUS_MARK, "")
+    assert "コトオ" in bare
+    assert "コトー" not in bare
+
+
+def test_cleanは自立語の境界では止める():
+    """内容語の頭が守られていること（本来直したかった欠陥）。"""
+    marked = accent_marked_text("貴官のことも教えていただけませんか？",
+                                merge_across_words=False).text
+    assert "コトモオシエテ" in marked.replace(NUCLEUS_MARK, "")
+
+
+def test_既定は助詞のヲも飲み込む():
+    """**現行最良 checkpoint の前提を固定する。**
+
+    `accent`（既定）では `ことを` が `コトー` になる。これは欠陥だが、
+    `m4a-accent` はこの入力で学習してあるので**推論も同じでなければ
+    ならない**。直した版は `accent_clean` として別に測る。
+    """
+    bare = accent_marked_text("その目で見たことを、そのまま言え").text.replace(
+        NUCLEUS_MARK, "")
+    assert "コトー" in bare
