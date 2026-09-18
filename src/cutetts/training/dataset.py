@@ -95,6 +95,35 @@ class LatentSource:
         return to_patches(normalized, patch_size=self.patch_size)
 
 
+@dataclass(frozen=True)
+class F0Source:
+    """F0 cache を patch 単位で読む（M4c）。
+
+    **`num_patches` を渡すのが要点。** target は `max_target_patches` と
+    系列長の予算で2回切られるので、**切り終わった長さに合わせて作る**。
+    こうしないと条件と patch が1つずれて、別の patch の高さを与える。
+    """
+
+    reader: object
+    """`F0CacheReader` 互換（`read(utterance_id)`、`__contains__`）。"""
+    patch_size: int = 2
+
+    def __contains__(self, utterance_id: str) -> bool:
+        return utterance_id in self.reader
+
+    def patches(self, utterance_id: str, num_patches: int) -> Tensor:
+        """``[num_patches, patch_size * 2]`` を返す。足りない分は 0 で埋まる。"""
+        from cutetts.training.f0 import patch_features
+
+        frames = self.reader.read(utterance_id)
+        array = patch_features(
+            frames.detach().cpu().numpy(),
+            patch_size=self.patch_size,
+            num_patches=int(num_patches),
+        )
+        return torch.from_numpy(array)
+
+
 def available(source: LatentSource, records: list[Utterance]) -> Iterator[Utterance]:
     """cache に latent がある record だけを流す。"""
     for record in records:

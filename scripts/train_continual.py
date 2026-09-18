@@ -124,8 +124,30 @@ def cosine_lr(step: int, *, peak: float, warmup: int, total: int, floor_ratio: f
     return peak * (floor_ratio + (1 - floor_ratio) * 0.5 * (1 + math.cos(math.pi * progress)))
 
 
+def save_f0_conditioner(target_dir: Path, conditioner) -> None:
+    """F0 条件の重みを **`inference/` の隣に別ファイルで**置く（M4c）。
+
+    `inference/weights/*/model.safetensors` は `strict=True` で読まれるので、
+    公開checkpointに無いモジュールをそこへ混ぜると**公開checkpointが
+    読めなくなる**。別ファイルにしておけば、要るときだけ読める。
+    """
+    if conditioner is None:
+        return
+    from safetensors.torch import save_file
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+    state = {name: value.detach().cpu().contiguous()
+             for name, value in conditioner.state_dict().items()}
+    save_file(state, str(target_dir / "f0_conditioner.safetensors"), metadata={
+        "feature_dim": str(conditioner.feature_dim),
+        "hidden_dim": str(conditioner.hidden_dim),
+        "phase": "m4c",
+    })
+
+
 def build_batch(pairs, *, source, speaker_reader, processor, max_length,
-                max_target_patches, frontend="none", assigner=None):
+                max_target_patches, frontend="none", assigner=None,
+                f0_source=None):
     """ペア列から `TrainingBatch` と speaker tensor を作る。作れなければ ``None``。"""
     samples, speakers = [], []
     for pair in pairs:
@@ -144,9 +166,18 @@ def build_batch(pairs, *, source, speaker_reader, processor, max_length,
         if budget < 2:
             continue
         target = target[: min(int(target.shape[0]), budget + 1)]
+        # **target を切り終わってから F0 を作る**（M4c）。
+        # 切る前に作ると長さが合わず、条件と patch が1つずれる
+        target_f0 = None
+        if f0_source is not None:
+            if pair.target.utterance_id not in f0_source:
+                continue                   # 条件が無い発話は混ぜない
+            target_f0 = f0_source.patches(pair.target.utterance_id,
+                                          int(target.shape[0]))
         samples.append(build_training_sample(
             utterance_id=pair.target.utterance_id, prompt=prompt,
-            reference_latents=reference, target_latents=target))
+            reference_latents=reference, target_latents=target,
+            target_f0=target_f0))
         speakers.append(speaker_reader.read(pair.reference_group[0].utterance_id))
     if not samples:
         return None
@@ -173,13 +204,15 @@ def build_eval_batches(records, *, seed, batch_size, batches, group_key, **kwarg
 
 
 @torch.no_grad()
-def evaluate(model, batches, *, flow_copies, stop_weight, seed):
+def evaluate(model, batches, *, flow_copies, stop_weight, seed,
+             f0_conditioner=None):
     """固定バッチで flow / stop loss を測る。``model`` の mode は呼び出し側で戻す。"""
     flow, stop = [], []
     for batch, speaker in batches:
         out = training_forward(model, batch, speaker_embeddings=speaker,
                                flow_copies=flow_copies, stop_weight=stop_weight,
-                               generator=torch.Generator().manual_seed(seed))
+                               generator=torch.Generator().manual_seed(seed),
+                               f0_conditioner=f0_conditioner)
         flow.append(float(out.flow_loss))
         stop.append(float(out.stop_loss))
     if not flow:
@@ -195,6 +228,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--speaker-cache", default="data/cache/speaker")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--dtype", default="bfloat16")
+    parser.add_argument("--f0-cache",
+                        help="F0 cache（M4c）。渡すと F0 の条件を学習する")
     parser.add_argument("--frontend", default="none", choices=FRONTEND_MODES,
                         help="学習テキストに掛ける frontend（M4a）。"
                              "**既定は none で、学習21回すべてこれだった**。"
@@ -268,6 +303,30 @@ def main() -> None:
         raise SystemExit("--trainable が空")
     frozen = freeze_all_but(model, trainable_names)
     trainable = [p for p in model.parameters() if p.requires_grad]
+
+    # M4c: F0 の条件。**zero-init なので学習開始時点は現行と同じ挙動。**
+    # 公開checkpointには無いモジュールなので、別ファイルとして export する
+    # （`inference/` の safetensors は `strict=True` で読まれるため、
+    # ここに混ぜると公開checkpointが読めなくなる）
+    f0_conditioner = None
+    f0_source = None
+    if args.f0_cache:
+        from cutetts.training.dataset import F0Source
+        from cutetts.training.f0 import (
+            F0_FEATURE_DIM,
+            F0CacheReader,
+            F0Conditioner,
+        )
+
+        patch = int(model.config.locenc_patch_size)
+        hidden = int(model.lm_speaker_linear.out_features)
+        f0_conditioner = F0Conditioner(F0_FEATURE_DIM * patch, hidden).to(device)
+        f0_conditioner = f0_conditioner.to(torch.float32)
+        f0_reader = F0CacheReader(args.f0_cache)
+        f0_source = F0Source(reader=f0_reader, patch_size=patch)
+        trainable += list(f0_conditioner.parameters())
+        print(f"F0 条件: {len(f0_reader):,} 発話 / "
+              f"{F0_FEATURE_DIM * patch} → {hidden}（zero-init）")
     print(f"trainable parameters: {sum(p.numel() for p in trainable)/1e6:.1f}M"
           f"  ({', '.join(trainable_names)})")
     if frozen:
@@ -338,7 +397,8 @@ def main() -> None:
     build_kwargs = dict(source=source, speaker_reader=speaker_reader,
                         processor=processor, max_length=max_length,
                         max_target_patches=args.max_target_patches,
-                        frontend=args.frontend, assigner=frontend_assigner)
+                        frontend=args.frontend, assigner=frontend_assigner,
+                        f0_source=f0_source)
     eval_sets: dict[str, list] = {}
     if args.eval_every:
         for split in ("dev-seen", "dev-zero-shot"):
@@ -364,7 +424,8 @@ def main() -> None:
         row = {"step": step}
         for split, batches in eval_sets.items():
             scores = evaluate(model, batches, flow_copies=args.flow_copies,
-                              stop_weight=args.stop_weight, seed=args.seed)
+                              stop_weight=args.stop_weight, seed=args.seed,
+                              f0_conditioner=f0_conditioner)
             if scores:
                 row[split] = scores
         model.train()
@@ -399,7 +460,8 @@ def main() -> None:
         optimizer.zero_grad(set_to_none=True)
         out = training_forward(model, batch, speaker_embeddings=speaker_tensor,
                                flow_copies=args.flow_copies, stop_weight=args.stop_weight,
-                               dropout=dropout, generator=generator)
+                               dropout=dropout, generator=generator,
+                               f0_conditioner=f0_conditioner)
         out.loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(trainable, args.grad_clip)
         optimizer.step()
@@ -432,6 +494,8 @@ def main() -> None:
                 export_for_inference(out_dir / f"inference-{step + 1}", model=model,
                                      source_model_dir=Path(args.model_dir),
                                      dtypes=export_dtypes)
+                save_f0_conditioner(out_dir / f"inference-{step + 1}",
+                                    f0_conditioner)
 
     state.step = args.steps
     save_training_state(out_dir, model=model, optimizer=optimizer, state=state,
@@ -439,6 +503,7 @@ def main() -> None:
     export_for_inference(out_dir / "inference", model=model,
                          source_model_dir=Path(args.model_dir),
                          dtypes=export_dtypes)
+    save_f0_conditioner(out_dir / "inference", f0_conditioner)
 
     artifacts.write_run_metadata(
         run_dir, phase="s0-train",
@@ -453,6 +518,19 @@ def main() -> None:
         print(f"  {module:16s} {ratio*100:6.2f}%"
               + ("" if ratio > 0.5 else "  ← ほぼ動いていない"))
 
+    # **F0 条件は zero-init なので、0 のままなら1度も学習されていない**（M4c）。
+    # cache に無い発話だけを引いていた、条件が None のまま流れていた、といった
+    # 静かな失敗がここで見える。**この確認を飛ばしてはいけない。**
+    f0_moved = None
+    if f0_conditioner is not None:
+        with torch.no_grad():
+            weight = f0_conditioner.proj.weight
+            f0_moved = float((weight != 0).float().mean())
+            scale = float(weight.abs().mean())
+        mark = "" if f0_moved > 0.5 else "  ← **1度も学習されていない**"
+        print(f"  {'f0_conditioner':16s} {f0_moved*100:6.2f}%"
+              f"（|w| 平均 {scale:.3e}）{mark}")
+
     artifacts.write_metrics(run_dir, {
         "phase": "s0-train", "settings": vars(args),
         "frozen_modules": frozen,
@@ -460,6 +538,7 @@ def main() -> None:
         "history": history,
         "evaluations": evaluations,
         "parameter_moved_ratio": moved,
+        "f0_conditioner_moved_ratio": f0_moved,
         "total_seconds": time.perf_counter() - started,
         "checkpoint": str(out_dir), "inference_export": str(out_dir / "inference"),
     })

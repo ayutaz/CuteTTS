@@ -80,6 +80,8 @@ class TrainingSample:
     prefix_length: int
     """teacher-forced target を除いた、prefix 部分の長さ。"""
     reference_patch_count: int
+    target_f0: Tensor | None = None
+    """[N, P * 2] F0 の条件（M4c）。**`target_patches` と同じ並び**。"""
 
     @property
     def length(self) -> int:
@@ -97,6 +99,7 @@ def build_training_sample(
     reference_latents: Tensor,
     target_latents: Tensor,
     initial_previous_cond: Tensor | None = None,
+    target_f0: Tensor | None = None,
 ) -> TrainingSample:
     """1発話ぶんの学習sampleを組み立てる。
 
@@ -201,7 +204,27 @@ def build_training_sample(
         stop_targets=stop_targets,
         prefix_length=prefix_len,
         reference_patch_count=n_reference,
+        target_f0=_checked_target_f0(target_f0, n_target, patch),
     )
+
+
+def _checked_target_f0(target_f0: Tensor | None, n_target: int, patch: int
+                       ) -> Tensor | None:
+    """F0 条件の形を検査する（M4c）。
+
+    **1つずれても黙って動いてしまう**ので、ここで落とす。
+    期待は ``[n_target, patch * 2]``（`f0.F0_FEATURE_DIM` は 2）。
+    """
+    if target_f0 is None:
+        return None
+    from cutetts.training.f0 import F0_FEATURE_DIM
+
+    expected = (int(n_target), int(patch) * F0_FEATURE_DIM)
+    if tuple(target_f0.shape) != expected:
+        raise ValueError(
+            f"target_f0 shape mismatch: expected {expected}, "
+            f"got {tuple(target_f0.shape)}")
+    return target_f0.to(torch.float32)
 
 
 @dataclass(frozen=True)
@@ -242,6 +265,8 @@ class TrainingBatch:
     """[B, 1, L, L] の加算マスク。packing で segment 境界を遮断するときだけ使う。"""
     position_ids: Tensor | None = None
     """[B, L] long。packing で segment ごとに振り直すときだけ使う。"""
+    target_f0: Tensor | None = None
+    """[sum(N_b), P * 2] F0 の条件（M4c）。**1つでも欠けたら None にする。**"""
 
     @property
     def batch_size(self) -> int:
@@ -302,6 +327,12 @@ def collate(samples: list[TrainingSample], *, pad_token_id: int = SPEECH_PLACEHO
         target_sample_index=sample_index,
         speaker_slot_sample_index=slot_sample_index,
         target_positions=torch.cat([s.target_positions for s in samples], dim=0),
+        # **1つでも欠けたら混ぜない。** 一部だけ条件が付くと、
+        # 「条件が無い」と「高さが中央値」を取り違える
+        target_f0=(
+            torch.cat([s.target_f0 for s in samples], dim=0)
+            if all(s.target_f0 is not None for s in samples) else None
+        ),
         previous_cond=torch.cat([s.previous_cond for s in samples], dim=0),
         stop_targets=torch.cat([s.stop_targets for s in samples], dim=0),
         target_mask=torch.ones(int(target_index.shape[0]), dtype=torch.bool, device=device),

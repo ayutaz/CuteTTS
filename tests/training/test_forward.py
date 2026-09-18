@@ -219,3 +219,106 @@ def test_batch_of_two_runs_and_separates_targets():
                            generator=torch.Generator().manual_seed(12))
     assert out.num_targets == 7
     assert torch.isfinite(out.loss)
+
+
+# ------------------------------------------------------ F0 の条件（M4c）
+#
+# **zero-init が no-op であること**が最重要。ここが崩れると、公開
+# checkpointからの継続学習が最初の step で壊れる。
+
+
+def _batch_with_f0(*, n_target: int = 5, n_reference: int = 3, seed: int = 0):
+    from cutetts.training.f0 import F0_FEATURE_DIM
+
+    g = torch.Generator().manual_seed(seed)
+    sample = build_training_sample(
+        utterance_id="u0",
+        prompt=_prompt(6),
+        reference_latents=torch.randn(n_reference, PATCH, DIM, generator=g),
+        target_latents=torch.randn(n_target, PATCH, DIM, generator=g),
+        target_f0=torch.randn(n_target, PATCH * F0_FEATURE_DIM, generator=g),
+    )
+    speaker = torch.randn(1, SPEAKER_DIM, generator=g)
+    return collate([sample]), speaker
+
+
+def test_zero_initのF0条件は何も変えない():
+    """**恒等から始まること。** ここが崩れると継続学習の前提が壊れる。"""
+    from cutetts.training.f0 import F0_FEATURE_DIM, F0Conditioner
+
+    model = _tiny_model()
+    batch, speaker = _batch_with_f0()
+    hidden = int(model.lm_speaker_linear.out_features)
+    conditioner = F0Conditioner(PATCH * F0_FEATURE_DIM, hidden)
+
+    without = training_forward(model, batch, speaker_embeddings=speaker,
+                               generator=torch.Generator().manual_seed(7))
+    with_zero = training_forward(model, batch, speaker_embeddings=speaker,
+                                 generator=torch.Generator().manual_seed(7),
+                                 f0_conditioner=conditioner)
+    assert float(with_zero.loss) == pytest.approx(float(without.loss), rel=1e-6)
+
+
+def test_学習後のF0条件は結果を変える():
+    from cutetts.training.f0 import F0_FEATURE_DIM, F0Conditioner
+
+    model = _tiny_model()
+    batch, speaker = _batch_with_f0()
+    hidden = int(model.lm_speaker_linear.out_features)
+    conditioner = F0Conditioner(PATCH * F0_FEATURE_DIM, hidden)
+    torch.nn.init.normal_(conditioner.proj.weight, std=0.5)
+
+    without = training_forward(model, batch, speaker_embeddings=speaker,
+                               generator=torch.Generator().manual_seed(7))
+    with_f0 = training_forward(model, batch, speaker_embeddings=speaker,
+                               generator=torch.Generator().manual_seed(7),
+                               f0_conditioner=conditioner)
+    assert float(with_f0.loss) != pytest.approx(float(without.loss), rel=1e-6)
+
+
+def test_F0条件に勾配が流れる():
+    """**grad が来なければ学習されない**（zero-init なので永遠に 0 のまま）。"""
+    from cutetts.training.f0 import F0_FEATURE_DIM, F0Conditioner
+
+    model = _tiny_model()
+    batch, speaker = _batch_with_f0()
+    hidden = int(model.lm_speaker_linear.out_features)
+    conditioner = F0Conditioner(PATCH * F0_FEATURE_DIM, hidden)
+    out = training_forward(model, batch, speaker_embeddings=speaker,
+                           generator=torch.Generator().manual_seed(7),
+                           f0_conditioner=conditioner)
+    out.loss.backward()
+    grad = conditioner.proj.weight.grad
+    assert grad is not None
+    assert torch.isfinite(grad).all()
+    assert float(grad.abs().sum()) > 0.0
+
+
+def test_F0条件が無いbatchでは無視される():
+    from cutetts.training.f0 import F0_FEATURE_DIM, F0Conditioner
+
+    model = _tiny_model()
+    batch, speaker = _batch()            # target_f0 は None
+    assert batch.target_f0 is None
+    conditioner = F0Conditioner(PATCH * F0_FEATURE_DIM,
+                                int(model.lm_speaker_linear.out_features))
+    torch.nn.init.normal_(conditioner.proj.weight, std=0.5)
+    without = training_forward(model, batch, speaker_embeddings=speaker,
+                               generator=torch.Generator().manual_seed(7))
+    with_f0 = training_forward(model, batch, speaker_embeddings=speaker,
+                               generator=torch.Generator().manual_seed(7),
+                               f0_conditioner=conditioner)
+    assert float(with_f0.loss) == pytest.approx(float(without.loss), rel=1e-6)
+
+
+def test_F0条件の形が違えば落ちる():
+    from cutetts.training.f0 import F0_FEATURE_DIM
+
+    g = torch.Generator().manual_seed(0)
+    with pytest.raises(ValueError):
+        build_training_sample(
+            utterance_id="u0", prompt=_prompt(6),
+            reference_latents=torch.randn(3, PATCH, DIM, generator=g),
+            target_latents=torch.randn(5, PATCH, DIM, generator=g),
+            target_f0=torch.randn(4, PATCH * F0_FEATURE_DIM, generator=g),
+        )

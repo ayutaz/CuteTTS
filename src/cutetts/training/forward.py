@@ -96,6 +96,7 @@ def training_forward(
     stop_positive_weight: float | None = None,
     dropout: ConditionDropoutConfig | None = None,
     generator: torch.Generator | None = None,
+    f0_conditioner: "torch.nn.Module | None" = None,
 ) -> ForwardOutput:
     """teacher forcing の1 step を計算して loss を返す。
 
@@ -152,6 +153,26 @@ def training_forward(
         )
     finally:
         model.config.scale_acoustic_latent = scale_flag
+
+    # M4c: F0 の条件を **その patch を予測する位置** へ足す。
+    #
+    # 位置 i の hidden が patch i を予測するので、**patch i の F0 は位置 i の
+    # 入力に足す**（位置 i の入力は patch i-1 の embedding）。こうすると
+    # 「次に出す高さ」を条件として渡せる。1つずらすと「もう出した高さ」に
+    # なって条件として働かない。
+    #
+    # `target_mask` が偽の target は padding / packing 境界で位置が無効なので
+    # **足さない**（足すと無関係な位置を汚す）。
+    if f0_conditioner is not None and batch.target_f0 is not None:
+        valid = target_mask
+        if valid.any():
+            features = batch.target_f0.to(device=device, dtype=torch.float32)[valid]
+            added = f0_conditioner(features).to(input_embeds.dtype)
+            input_embeds = input_embeds.index_put(
+                (target_index[valid], target_positions[valid]),
+                added,
+                accumulate=True,
+            )
 
     if batch.attention_bias is not None:
         # packing: segment 境界を遮断する加算マスクを使う

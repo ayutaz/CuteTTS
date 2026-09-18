@@ -52,10 +52,17 @@ cutetts-demo --model-dir ./model --device auto --host 127.0.0.1 --port 7860
 システム既定のPythonは3.14で **torch 2.5.1 が動かない**（対応は3.9〜3.12）。
 日本語学習側の作業はリポジトリ直下の `.venv`（Python 3.12 + torch 2.5.1+cu121）で行う。
 
+**Python は uv から実行する**（2026-09-19、ユーザー指示）。
+**`--no-sync` を付ける。** 付けないと `uv run` が pyproject から環境を
+同期し直すので、別途入れた torch 2.5.1+cu121 を入れ替えてしまう。
+
 ```bash
-.venv/Scripts/python.exe -m pytest tests/training -v   # テスト
-.venv/Scripts/python.exe scripts/<name>.py --config configs/japanese/<name>.yaml
+uv run --no-sync python -m pytest tests/training -v   # テスト
+uv run --no-sync python scripts/<name>.py --config configs/japanese/<name>.yaml
 ```
+
+`uv run --no-sync python -c "import sys; print(sys.executable)"` で
+`.venv/Scripts/python.exe` を指していることを確認できる。
 
 GPUは RTX 4070 Ti SUPER 16 GB（05章が想定した4090 24GBより小さい。R-007参照）。
 

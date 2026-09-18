@@ -334,6 +334,55 @@ def contour_similarity(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.corrcoef(left, right)[0, 1])
 
 
+def time_aligned_contour(f0: np.ndarray) -> np.ndarray:
+    """**時間軸を保った**半音の輪郭（M4c で追加）。
+
+    `semitone_contour` は**有声フレームだけを詰める**ので、有声・無声の
+    判定が少し食い違うだけで系列全体がずれる。実測（人間音声30件）で、
+    **同じ発話を VAE で往復させただけで相関が 0.417 まで落ちた**
+    （有声判定の一致は 85.6%）。M2 の「天井」+0.382（別テイク同士）と
+    ほぼ同じで、**指標が「同じ発話」と「別テイク」を区別できていない**。
+
+    こちらは無声フレームを**前後の有声から線形補間で埋める**ので、
+    フレーム番号がそのまま時間に対応する。間（ポーズ）は平らな区間として残る。
+
+    | 比較 | `semitone_contour` | **こちら** |
+    |---|---:|---:|
+    | 同一音声 | 1.000 | 1.000 |
+    | VAE往復（同一発話） | 0.417 | R-050 参照 |
+    | 別テイク（同一話者・同一台詞） | 0.382 | R-050 参照 |
+    | 別の文（床） | -0.009 | R-050 参照 |
+
+    **既存の値との継続性のため `semitone_contour` は変えない。**
+    公表済みの数値はすべてあちらで測ってある。
+    """
+    array = np.asarray(f0, dtype=np.float64)
+    voiced = array > 0
+    if not voiced.any():
+        return np.zeros(0, dtype=np.float64)
+    index = np.arange(array.size, dtype=np.float64)
+    filled = np.interp(index, index[voiced], array[voiced])
+    return 12.0 * np.log2(filled / np.median(array[voiced]))
+
+
+def contour_similarity_time(a_f0: np.ndarray, b_f0: np.ndarray) -> float:
+    """`time_aligned_contour` で取った輪郭の相関。
+
+    引数は **F0（Hz、無声は 0）** であって半音の輪郭ではない
+    （`contour_similarity` は輪郭を受け取るので、間違えないよう名前を分けた）。
+    """
+    left = time_aligned_contour(a_f0)
+    right = time_aligned_contour(b_f0)
+    if left.size < MIN_VOICED_FRAMES or right.size < MIN_VOICED_FRAMES:
+        return float("nan")
+    length = max(left.size, right.size)
+    left = resample_contour(left, length)
+    right = resample_contour(right, length)
+    if left.std() == 0 or right.std() == 0:
+        return float("nan")
+    return float(np.corrcoef(left, right)[0, 1])
+
+
 def split_moras(reading: str) -> list[str]:
     """片仮名の読みをモーラへ分ける。小書き仮名は直前に結合する。
 
