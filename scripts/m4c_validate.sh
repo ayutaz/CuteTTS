@@ -39,6 +39,8 @@ WORKERS="${WORKERS:-16}"
 FRONTEND="${FRONTEND:-accent}"
 SHARDS="${SHARDS:-2}"
 MODEL="${MODEL:-model/CuteTTS}"
+TAG="${TAG:-validate}"
+LOOKAHEAD="${LOOKAHEAD:-1}"
 
 if [ -z "${HF_TOKEN:-}" ]; then
   echo "HF_TOKEN が要る" >&2
@@ -61,7 +63,7 @@ LATENTS="data/s1v2/latents-v2"
 SPEAKERS="data/s1v2/speaker-v2"
 SUBSET="data/s1v2/subset-${HOURS}h.jsonl"
 F0="data/s1v2/f0-${HOURS}h"
-OUT="checkpoints/m4c-validate"
+OUT="checkpoints/m4c-${TAG}"
 
 # ---------------------------------------------------------------- 1. データ
 if [ ! -f "$MANIFEST" ]; then
@@ -94,11 +96,11 @@ python -u scripts/cache_f0_targets.py --latent-cache "$LATENTS" --out "$F0" \
 if [ -d "$OUT/inference" ]; then
   echo "=== 4/6 学習は済み ==="
 else
-  echo "=== 4/6 学習（${STEPS} step / frontend=${FRONTEND}）==="
+  echo "=== 4/6 学習（${STEPS} step / frontend=${FRONTEND} / 先読み ${LOOKAHEAD}）==="
   python -u scripts/train_continual.py \
     --manifest "$SUBSET" --latent-cache "$LATENTS" --speaker-cache "$SPEAKERS" \
     --model-dir "$MODEL" --param-dtype float32 --frontend "$FRONTEND" \
-    --f0-cache "$F0" --f0-lr 2e-4 \
+    --f0-cache "$F0" --f0-lr 2e-4 --f0-lookahead "$LOOKAHEAD" \
     --steps "$STEPS" --batch-size 4 --lr 2e-5 --seed 42 \
     --save-every "$STEPS" --export-every-save --eval-every 1000 \
     --out "$OUT"
@@ -138,15 +140,15 @@ for spec in "none| " "oracle|--f0-source oracle" "mismatch|--f0-source mismatch"
   IFS='|' read -r name extra <<< "$spec"
   [ -f "/workspace/done-m4c-${name}" ] && { echo "  済み: ${name}"; continue; }
   echo "--- ${name} ---"
-  eval_sharded "m4c-${name}-prosody" "$extra"
+  eval_sharded "m4c-${TAG}-${name}-prosody" "$extra"
   touch "/workspace/done-m4c-${name}"
 done
 
 # ---------------------------------------------------------------- 6. 比較
 echo
 echo "=== 6/6 比較 ==="
-python -u scripts/compare_prosody_runs.py m4c-none-prosody m4c-oracle-prosody || true
-python -u scripts/compare_prosody_runs.py m4c-none-prosody m4c-mismatch-prosody || true
+python -u scripts/compare_prosody_runs.py "m4c-${TAG}-none-prosody" "m4c-${TAG}-oracle-prosody" || true
+python -u scripts/compare_prosody_runs.py "m4c-${TAG}-none-prosody" "m4c-${TAG}-mismatch-prosody" || true
 
 echo
 echo '判定: oracle の輪郭が +0.20 以上なら経路は通っている（上限は +0.367）。'
