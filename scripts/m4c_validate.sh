@@ -42,6 +42,8 @@ MODEL="${MODEL:-model/CuteTTS}"
 TAG="${TAG:-validate}"
 LOOKAHEAD="${LOOKAHEAD:-1}"
 INJECT="${INJECT:-lm}"
+POSITION="${POSITION:-}"
+DROPOUT="${DROPOUT:-0}"
 
 if [ -z "${HF_TOKEN:-}" ]; then
   echo "HF_TOKEN が要る" >&2
@@ -89,19 +91,39 @@ echo "  部分集合 $(wc -l < "$SUBSET") 行"
 
 # ---------------------------------------------------------------- 3. F0 cache
 # **ここで decode の速度が分かる。** 本番の見積もりはこの実測で更新する
+# **train と dev だけ作る。** 部分集合をそのまま渡すと test も対象になり、
+# 17.9h の検証で 84.8h ぶん作ってしまった（必要なのは 42.7h）
+F0_MANIFEST="${SUBSET%.jsonl}-f0.jsonl"
+if [ ! -f "$F0_MANIFEST" ]; then
+  python - "$SUBSET" "$F0_MANIFEST" <<'PYEOF'
+import json
+import sys
+
+source, target = sys.argv[1], sys.argv[2]
+kept = 0
+with open(source, encoding="utf-8") as src, open(target, "w", encoding="utf-8") as dst:
+    for line in src:
+        row = json.loads(line)
+        if str(row.get("split", "")).startswith(("train", "dev")):
+            dst.write(line)
+            kept += 1
+print(f"  F0 を作る対象: {kept:,} 行（test は除く）")
+PYEOF
+fi
+
 echo "=== 3/6 F0 cache（decode + harvest）==="
 python -u scripts/cache_f0_targets.py --latent-cache "$LATENTS" --out "$F0" \
-  --model-dir "$MODEL" --manifest "$SUBSET" --device cuda --workers "$WORKERS"
+  --model-dir "$MODEL" --manifest "$F0_MANIFEST" --device cuda --workers "$WORKERS"
 
 # ---------------------------------------------------------------- 4. 学習
 if [ -d "$OUT/inference" ]; then
   echo "=== 4/6 学習は済み ==="
 else
-  echo "=== 4/6 学習（${STEPS} step / frontend=${FRONTEND} / 先読み ${LOOKAHEAD} / 差込 ${INJECT}）==="
+  echo "=== 4/6 学習（${STEPS} step / frontend=${FRONTEND} / 先読み ${LOOKAHEAD} / 差込 ${INJECT}${POSITION:+ / 位置} / dropout ${DROPOUT}）==="
   python -u scripts/train_continual.py \
     --manifest "$SUBSET" --latent-cache "$LATENTS" --speaker-cache "$SPEAKERS" \
     --model-dir "$MODEL" --param-dtype float32 --frontend "$FRONTEND" \
-    --f0-cache "$F0" --f0-lr 2e-4 --f0-lookahead "$LOOKAHEAD" --f0-inject "$INJECT" \
+    --f0-cache "$F0" --f0-lr 2e-4 --f0-lookahead "$LOOKAHEAD" --f0-inject "$INJECT" --f0-dropout "$DROPOUT" ${POSITION:+--f0-position} \
     --steps "$STEPS" --batch-size 4 --lr 2e-5 --seed 42 \
     --save-every "$STEPS" --export-every-save --eval-every 1000 \
     --out "$OUT"
