@@ -69,6 +69,13 @@ class NaiveInferConfig:
     batch_lm_cfg_decode: bool = False
     static_lm_cache: bool = False
     compile_lm_decode: bool = False
+    extra_step_speaker: "Callable[[int], torch.Tensor] | None" = None
+    """Per-step addition to the DiT head's speaker vector (M4c).
+
+    The head applies ``speaker_adaln`` per row, so adding a per-patch vector
+    here conditions every DiT layer for the patch about to be generated.
+    Called with the 0-based patch index; returning ``None`` skips that step.
+    """
     extra_step_embedding: "Callable[[int], torch.Tensor] | None" = None
     """Per-step conditioning added to the LM input (M4c).
 
@@ -995,7 +1002,19 @@ def _naive_ar_infer_impl(
             audio_dit_uncond_previous_cond,
             audio_dit_secondary_uncond_previous_cond,
         )
-        _add_speaker_embedding_input(head_additional_input, speaker_embedding)
+        # M4c: patch ごとの条件を **head の speaker ベクトル**へ足す
+        step_speaker = speaker_embedding
+        if config.extra_step_speaker is not None and speaker_embedding is not None:
+            extra = config.extra_step_speaker(int(idx_step))
+            if extra is not None:
+                extra = extra.reshape(1, -1).to(device=speaker_embedding.device,
+                                                dtype=speaker_embedding.dtype)
+                if extra.size(-1) != speaker_embedding.size(-1):
+                    raise ValueError(
+                        f"extra_step_speaker returned width {extra.size(-1)}, "
+                        f"expected {speaker_embedding.size(-1)}.")
+                step_speaker = speaker_embedding + extra
+        _add_speaker_embedding_input(head_additional_input, step_speaker)
 
         diffusion_started = start_stage(stage_profiler)
         if use_cfg and config.cfg_mode == 'head':

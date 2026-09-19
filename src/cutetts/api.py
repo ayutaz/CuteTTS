@@ -127,6 +127,7 @@ class CuteTTS:
         show_progress: bool = True,
         pcm_chunk_callback: Callable[[torch.Tensor], None] | None = None,
         extra_step_embedding: Callable[[int], torch.Tensor] | None = None,
+        extra_step_speaker: Callable[[int], torch.Tensor] | None = None,
     ) -> GenerationResult:
         """``extra_step_embedding`` は patch ごとの追加条件（M4c）。
 
@@ -237,6 +238,7 @@ class CuteTTS:
             diffusion_sway_coefficient=sway,
             distilled_cfg_strength=distilled_cfg,
             extra_step_embedding=extra_step_embedding,
+            extra_step_speaker=extra_step_speaker,
         )
         result = naive_ar_infer(
             infer_config,

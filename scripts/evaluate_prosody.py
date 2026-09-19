@@ -176,7 +176,9 @@ def _f0_hook(path: Path, conditioner, vae, patch_size: int, device: str):
             f"{unit} の倍数でない")
     if lookahead > 1:
         patches = lookahead_features(patches, lookahead)
-    return step_embedding_hook(conditioner, patches, device=device)
+    hook = step_embedding_hook(conditioner, patches, device=device)
+    # **差し込む場所で渡す口が違う。** conditioner の metadata に従う
+    return (hook, getattr(conditioner, "inject", "lm"))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -417,6 +419,7 @@ def main() -> None:
         # 実測で prosody set 240文のうち2文（0.8%）が壊れていた。
         reference = audio_dir / item["reference_wav"]
         f0_hook = None
+        f0_kwargs: dict = {}
         if f0_conditioner is not None:
             source_key = {"oracle": "human_wav",
                           "transfer": "take_b_wav",
@@ -426,13 +429,16 @@ def main() -> None:
                              "detail": f"{source_key} が無い（--f0-source"
                                        f"={args.f0_source}）"})
                 continue
-            f0_hook = _f0_hook(audio_dir / item[source_key], f0_conditioner,
-                               f0_vae, patch_size, str(device))
+            f0_hook, inject = _f0_hook(audio_dir / item[source_key],
+                                       f0_conditioner, f0_vae, patch_size,
+                                       str(device))
+            f0_kwargs = ({"extra_step_embedding": f0_hook} if inject == "lm"
+                         else {"extra_step_speaker": f0_hook})
         try:
             result = model.generate(
                 spoken, mode="voice_clone", reference_audio=str(reference),
                 seed=args.seed, max_decode_length=args.max_decode_length,
-                show_progress=False, extra_step_embedding=f0_hook,
+                show_progress=False, **f0_kwargs,
             )
         except Exception as error:                 # 失敗も記録して先へ進む
             rows.append({"index": index, "text": text, "status": "error",

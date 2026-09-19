@@ -62,6 +62,7 @@ __all__ = [
     "default_f0_meta",
     "F0_FEATURE_DIM",
     "F0_FRAMES_PER_LATENT",
+    "F0_INJECT_SITES",
     "F0_LOOKAHEAD_PATCHES",
     "lookahead_features",
     "F0Conditioner",
@@ -445,13 +446,26 @@ class F0CacheReader:
 # --- 推論側 ------------------------------------------------------------------
 
 
-def load_f0_conditioner(model_dir: str | Path, device: str = "cpu"
-                        ) -> "F0Conditioner | None":
+#: 条件を差し込む場所。
+#:
+#: * ``"lm"``   … LM の入力へ加算する（1回目・2回目）
+#: * ``"head"`` … **DiT head の speaker ベクトルへ加算する**。
+#:   `speaker_adaln` は patch ごとの行を取るので、これだけで per-patch の
+#:   adaLN 条件になる（upstream を変えずに済む）
+F0_INJECT_SITES = ("lm", "head")
+
+
+def load_f0_conditioner(model_dir: str | Path, device: str = "cpu"):
     """`inference/f0_conditioner.safetensors` を読む。無ければ ``None``。
+
+    返り値には ``inject`` 属性が付く（``"lm"`` か ``"head"``）。
+    **metadata から読む** — 出力次元から推測すると、たまたま一致したときに
+    黙って別の場所へ差し込むことになる。
 
     **`inference/weights` には混ぜない。** あちらは `strict=True` で読まれるので、
     公開checkpointに無いモジュールを置くと読めなくなる。
     """
+    from safetensors import safe_open
     from safetensors.torch import load_file
 
     path = Path(model_dir) / "f0_conditioner.safetensors"
@@ -461,7 +475,14 @@ def load_f0_conditioner(model_dir: str | Path, device: str = "cpu"
     weight = state["proj.weight"]
     module = F0Conditioner(int(weight.shape[1]), int(weight.shape[0]))
     module.load_state_dict(state, strict=True)
-    return module.to(device).eval()
+    with safe_open(str(path), framework="pt") as handle:
+        metadata = handle.metadata() or {}
+    inject = str(metadata.get("inject", "lm"))
+    if inject not in F0_INJECT_SITES:
+        raise ValueError(f"未知の inject: {inject}（{F0_INJECT_SITES}）")
+    module = module.to(device).eval()
+    module.inject = inject
+    return module
 
 
 def roundtrip_waveform(vae, waveform: np.ndarray) -> np.ndarray:

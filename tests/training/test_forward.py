@@ -322,3 +322,63 @@ def test_F0条件の形が違えば落ちる():
             target_latents=torch.randn(5, PATCH, DIM, generator=g),
             target_f0=torch.randn(4, PATCH * F0_FEATURE_DIM, generator=g),
         )
+
+
+def _train_speaker_adaln(model, std: float = 0.05) -> None:
+    """`speaker_adaln` を 0 でない値にする（tiny model は未学習なので）。
+
+    **zero-init のままだと speaker へ勾配が流れない。** gate が 0 なので
+    枝ごと消え、`d(gate)/d(speaker) = W_gate = 0` になる。
+    公開checkpointでは学習済み（|w| 平均 2.06e-02、最大 1.05）なので
+    実機ではこの問題は起きない。
+    """
+    for name, param in model.head.named_parameters():
+        if "speaker_adaln" in name:
+            torch.nn.init.normal_(param, std=std)
+
+
+def test_head側のF0条件もzero_initならno_op():
+    """**差し込む場所を変えても恒等から始まること。**"""
+    from cutetts.training.f0 import F0_FEATURE_DIM, F0Conditioner
+
+    model = _tiny_model()
+    batch, speaker = _batch_with_f0()
+    conditioner = F0Conditioner(PATCH * F0_FEATURE_DIM, SPEAKER_DIM)
+
+    without = training_forward(model, batch, speaker_embeddings=speaker,
+                               generator=torch.Generator().manual_seed(7))
+    with_zero = training_forward(model, batch, speaker_embeddings=speaker,
+                                 generator=torch.Generator().manual_seed(7),
+                                 f0_head_conditioner=conditioner)
+    assert float(with_zero.loss) == pytest.approx(float(without.loss), rel=1e-6)
+
+
+def test_head側のF0条件に勾配が流れる():
+    from cutetts.training.f0 import F0_FEATURE_DIM, F0Conditioner
+
+    model = _tiny_model()
+    batch, speaker = _batch_with_f0()
+    _train_speaker_adaln(model)
+    conditioner = F0Conditioner(PATCH * F0_FEATURE_DIM, SPEAKER_DIM)
+    out = training_forward(model, batch, speaker_embeddings=speaker,
+                           generator=torch.Generator().manual_seed(7),
+                           f0_head_conditioner=conditioner)
+    out.loss.backward()
+    grad = conditioner.proj.weight.grad
+    assert grad is not None and float(grad.abs().sum()) > 0.0
+
+
+def test_head側の条件は学習すると結果を変える():
+    from cutetts.training.f0 import F0_FEATURE_DIM, F0Conditioner
+
+    model = _tiny_model()
+    batch, speaker = _batch_with_f0()
+    _train_speaker_adaln(model)
+    conditioner = F0Conditioner(PATCH * F0_FEATURE_DIM, SPEAKER_DIM)
+    torch.nn.init.normal_(conditioner.proj.weight, std=0.5)
+    without = training_forward(model, batch, speaker_embeddings=speaker,
+                               generator=torch.Generator().manual_seed(7))
+    with_f0 = training_forward(model, batch, speaker_embeddings=speaker,
+                               generator=torch.Generator().manual_seed(7),
+                               f0_head_conditioner=conditioner)
+    assert float(with_f0.loss) != pytest.approx(float(without.loss), rel=1e-6)

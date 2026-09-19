@@ -97,6 +97,7 @@ def training_forward(
     dropout: ConditionDropoutConfig | None = None,
     generator: torch.Generator | None = None,
     f0_conditioner: "torch.nn.Module | None" = None,
+    f0_head_conditioner: "torch.nn.Module | None" = None,
 ) -> ForwardOutput:
     """teacher forcing の1 step を計算して loss を返す。
 
@@ -200,11 +201,20 @@ def training_forward(
     )
 
     head_dtype = next(model.head.parameters()).dtype
+    # M4c（4回目）: **head の speaker ベクトルへ F0 を足す。**
+    # `speaker_adaln` は patch ごとの行を取るので、これだけで per-patch の
+    # adaLN 条件になる（`diffusion_head.py` を変えずに済む）。
+    head_speaker = None if speaker is None else speaker[target_sample]
+    if (f0_head_conditioner is not None and batch.target_f0 is not None
+            and head_speaker is not None):
+        features = batch.target_f0.to(device=device, dtype=torch.float32)
+        head_speaker = head_speaker + f0_head_conditioner(features).to(
+            head_speaker.dtype)
     flow_batch: FlowBatch = build_flow_batch(
         target_patches.to(head_dtype),
         z.to(head_dtype),
         previous_cond.to(head_dtype),
-        None if speaker is None else speaker[target_sample].to(head_dtype),
+        None if head_speaker is None else head_speaker.to(head_dtype),
         target_mask,
         copies=flow_copies,
         generator=generator,

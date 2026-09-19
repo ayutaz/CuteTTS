@@ -142,6 +142,8 @@ def save_f0_conditioner(target_dir: Path, conditioner) -> None:
         "feature_dim": str(conditioner.feature_dim),
         "hidden_dim": str(conditioner.hidden_dim),
         "phase": "m4c",
+        "inject": getattr(conditioner, "inject", "lm"),
+        "lookahead": str(getattr(conditioner, "lookahead", "")),
     })
 
 
@@ -205,14 +207,14 @@ def build_eval_batches(records, *, seed, batch_size, batches, group_key, **kwarg
 
 @torch.no_grad()
 def evaluate(model, batches, *, flow_copies, stop_weight, seed,
-             f0_conditioner=None):
+             f0_kwargs=None):
     """固定バッチで flow / stop loss を測る。``model`` の mode は呼び出し側で戻す。"""
     flow, stop = [], []
     for batch, speaker in batches:
         out = training_forward(model, batch, speaker_embeddings=speaker,
                                flow_copies=flow_copies, stop_weight=stop_weight,
                                generator=torch.Generator().manual_seed(seed),
-                               f0_conditioner=f0_conditioner)
+                               **(f0_kwargs or {}))
         flow.append(float(out.flow_loss))
         stop.append(float(out.stop_loss))
     if not flow:
@@ -230,6 +232,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dtype", default="bfloat16")
     parser.add_argument("--f0-cache",
                         help="F0 cache（M4c）。渡すと F0 の条件を学習する")
+    parser.add_argument("--f0-inject", default="lm", choices=("lm", "head"),
+                        help="条件を差し込む場所。head は DiT head の speaker "
+                             "ベクトルへ足す（patch ごとの adaLN になる）")
     parser.add_argument("--f0-lookahead", type=int, default=1,
                         help="条件に含める**この先の patch 数**。"
                              "1 だと履歴から予測できてモデルが無視する（M4c）")
@@ -316,6 +321,7 @@ def main() -> None:
     # ここに混ぜると公開checkpointが読めなくなる）
     f0_conditioner = None
     f0_source = None
+    f0_kwargs: dict = {}
     if args.f0_cache:
         from cutetts.training.dataset import F0Source
         from cutetts.training.f0 import (
@@ -325,17 +331,26 @@ def main() -> None:
         )
 
         patch = int(model.config.locenc_patch_size)
-        hidden = int(model.lm_speaker_linear.out_features)
+        # **差し込む場所で出力次元が変わる。** lm は LM の隠れ次元、
+        # head は speaker ベクトルの次元（`speaker_adaln` の入力）
+        hidden = (int(model.lm_speaker_linear.out_features) if args.f0_inject == "lm"
+                  else int(model.config.lm_speaker_embedding_dim))
         width = F0_FEATURE_DIM * patch * int(args.f0_lookahead)
         f0_conditioner = F0Conditioner(width, hidden).to(device)
         f0_conditioner = f0_conditioner.to(torch.float32)
+        # **保存時に metadata へ書く。** 推論側は出力次元から推測しない
+        f0_conditioner.inject = args.f0_inject
+        f0_conditioner.lookahead = int(args.f0_lookahead)
         f0_reader = F0CacheReader(args.f0_cache)
         f0_source = F0Source(reader=f0_reader, patch_size=patch,
                              lookahead=int(args.f0_lookahead))
         f0_params = list(f0_conditioner.parameters())
         trainable += f0_params
+        f0_kwargs = ({"f0_conditioner": f0_conditioner} if args.f0_inject == "lm"
+                     else {"f0_head_conditioner": f0_conditioner})
         print(f"F0 条件: {len(f0_reader):,} 発話 / "
-              f"{width} → {hidden}（zero-init / 先読み {args.f0_lookahead} patch）"
+              f"{width} → {hidden}（zero-init / 先読み {args.f0_lookahead} patch"
+              f" / 差込 {args.f0_inject}）"
               f" lr={args.f0_lr if args.f0_lr else args.lr:g}")
     print(f"trainable parameters: {sum(p.numel() for p in trainable)/1e6:.1f}M"
           f"  ({', '.join(trainable_names)})")
@@ -450,7 +465,7 @@ def main() -> None:
         for split, batches in eval_sets.items():
             scores = evaluate(model, batches, flow_copies=args.flow_copies,
                               stop_weight=args.stop_weight, seed=args.seed,
-                              f0_conditioner=f0_conditioner)
+                              f0_kwargs=f0_kwargs)
             if scores:
                 row[split] = scores
         model.train()
@@ -489,7 +504,7 @@ def main() -> None:
         out = training_forward(model, batch, speaker_embeddings=speaker_tensor,
                                flow_copies=args.flow_copies, stop_weight=args.stop_weight,
                                dropout=dropout, generator=generator,
-                               f0_conditioner=f0_conditioner)
+                               **f0_kwargs)
         out.loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(trainable, args.grad_clip)
         optimizer.step()
