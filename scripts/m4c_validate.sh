@@ -41,6 +41,7 @@ SHARDS="${SHARDS:-2}"
 MODEL="${MODEL:-model/CuteTTS}"
 TAG="${TAG:-validate}"
 LOOKAHEAD="${LOOKAHEAD:-1}"
+INJECT="${INJECT:-lm}"
 
 if [ -z "${HF_TOKEN:-}" ]; then
   echo "HF_TOKEN が要る" >&2
@@ -96,11 +97,11 @@ python -u scripts/cache_f0_targets.py --latent-cache "$LATENTS" --out "$F0" \
 if [ -d "$OUT/inference" ]; then
   echo "=== 4/6 学習は済み ==="
 else
-  echo "=== 4/6 学習（${STEPS} step / frontend=${FRONTEND} / 先読み ${LOOKAHEAD}）==="
+  echo "=== 4/6 学習（${STEPS} step / frontend=${FRONTEND} / 先読み ${LOOKAHEAD} / 差込 ${INJECT}）==="
   python -u scripts/train_continual.py \
     --manifest "$SUBSET" --latent-cache "$LATENTS" --speaker-cache "$SPEAKERS" \
     --model-dir "$MODEL" --param-dtype float32 --frontend "$FRONTEND" \
-    --f0-cache "$F0" --f0-lr 2e-4 --f0-lookahead "$LOOKAHEAD" \
+    --f0-cache "$F0" --f0-lr 2e-4 --f0-lookahead "$LOOKAHEAD" --f0-inject "$INJECT" \
     --steps "$STEPS" --batch-size 4 --lr 2e-5 --seed 42 \
     --save-every "$STEPS" --export-every-save --eval-every 1000 \
     --out "$OUT"
