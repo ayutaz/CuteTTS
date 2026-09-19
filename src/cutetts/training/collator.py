@@ -224,10 +224,12 @@ def _checked_target_f0(target_f0: Tensor | None, n_target: int, patch: int
         raise ValueError(
             f"target_f0 shape mismatch: expected ({n_target}, k*{unit}), "
             f"got {tuple(target_f0.shape)}")
-    # **幅は patch*2 の倍数**（先読みを連結すると倍数になる。M4c）
-    if int(target_f0.shape[1]) % unit != 0 or int(target_f0.shape[1]) == 0:
+    # **幅は patch*2 の倍数**（先読みを連結すると倍数になる。M4c）。
+    # **位置を足すと +1 される**（M4d）ので、そちらも許す
+    width = int(target_f0.shape[1])
+    if width == 0 or (width % unit != 0 and (width - 1) % unit != 0):
         raise ValueError(
-            f"target_f0 width {int(target_f0.shape[1])} は {unit} の倍数でない")
+            f"target_f0 width {width} は {unit} の倍数（+1 まで）でない")
     return target_f0.to(torch.float32)
 
 

@@ -293,3 +293,41 @@ def test_先読みの引数を検査する():
         lookahead_features(np.zeros((2, 2), dtype=np.float32), lookahead=0)
     with pytest.raises(ValueError):
         lookahead_features(np.zeros(4, dtype=np.float32))
+
+
+# ---------------------------------------------------------- 位置の情報（M4d）
+#
+# **時間のずれが疑われるから足す。** 輪郭（伸縮に強い）は +0.118 改善したのに
+# アクセント核（位置に敏感）は動かなかった。この非対称が「届いてはいるが
+# 位置がずれている」ことを示している。
+
+
+def test_位置は0から1まで():
+    from cutetts.training.f0 import add_position
+
+    out = add_position(np.zeros((5, 2), dtype=np.float32))
+    assert out.shape == (5, 3)
+    assert out[0, -1] == pytest.approx(0.0)
+    assert out[-1, -1] == pytest.approx(1.0)   # **最後が 1.0**
+
+
+def test_位置は元の値を壊さない():
+    from cutetts.training.f0 import add_position
+
+    patches = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
+    out = add_position(patches)
+    assert out[:, :2].tolist() == patches.tolist()
+
+
+def test_1つだけの発話でも壊れない():
+    from cutetts.training.f0 import add_position
+
+    out = add_position(np.zeros((1, 2), dtype=np.float32))
+    assert out.shape == (1, 3)
+    assert np.isfinite(out).all()
+
+
+def test_空でも形は合う():
+    from cutetts.training.f0 import add_position
+
+    assert add_position(np.zeros((0, 4), dtype=np.float32)).shape == (0, 5)

@@ -144,6 +144,7 @@ def save_f0_conditioner(target_dir: Path, conditioner) -> None:
         "phase": "m4c",
         "inject": getattr(conditioner, "inject", "lm"),
         "lookahead": str(getattr(conditioner, "lookahead", "")),
+        "position": str(bool(getattr(conditioner, "position", False))),
     })
 
 
@@ -232,6 +233,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dtype", default="bfloat16")
     parser.add_argument("--f0-cache",
                         help="F0 cache（M4c）。渡すと F0 の条件を学習する")
+    parser.add_argument("--f0-position", action="store_true",
+                        help="発話内の位置を条件に足す（M4d）。"
+                             "**時間のずれを直す狙い**")
+    parser.add_argument("--f0-dropout", type=float, default=0.0,
+                        help="条件を sample 単位で落とす確率（M4e）。"
+                             "**落としても劣化しないようにする**")
     parser.add_argument("--f0-inject", default="lm", choices=("lm", "head"),
                         help="条件を差し込む場所。head は DiT head の speaker "
                              "ベクトルへ足す（patch ごとの adaLN になる）")
@@ -336,21 +343,27 @@ def main() -> None:
         hidden = (int(model.lm_speaker_linear.out_features) if args.f0_inject == "lm"
                   else int(model.config.lm_speaker_embedding_dim))
         width = F0_FEATURE_DIM * patch * int(args.f0_lookahead)
+        if args.f0_position:
+            width += 1                     # M4d: 発話内の位置
         f0_conditioner = F0Conditioner(width, hidden).to(device)
         f0_conditioner = f0_conditioner.to(torch.float32)
         # **保存時に metadata へ書く。** 推論側は出力次元から推測しない
         f0_conditioner.inject = args.f0_inject
         f0_conditioner.lookahead = int(args.f0_lookahead)
+        f0_conditioner.position = bool(args.f0_position)
         f0_reader = F0CacheReader(args.f0_cache)
         f0_source = F0Source(reader=f0_reader, patch_size=patch,
-                             lookahead=int(args.f0_lookahead))
+                             lookahead=int(args.f0_lookahead),
+                             position=bool(args.f0_position))
         f0_params = list(f0_conditioner.parameters())
         trainable += f0_params
         f0_kwargs = ({"f0_conditioner": f0_conditioner} if args.f0_inject == "lm"
                      else {"f0_head_conditioner": f0_conditioner})
         print(f"F0 条件: {len(f0_reader):,} 発話 / "
               f"{width} → {hidden}（zero-init / 先読み {args.f0_lookahead} patch"
-              f" / 差込 {args.f0_inject}）"
+              f" / 差込 {args.f0_inject}"
+              f"{' / 位置あり' if args.f0_position else ''}"
+              f"{f' / dropout {args.f0_dropout}' if args.f0_dropout else ''}）"
               f" lr={args.f0_lr if args.f0_lr else args.lr:g}")
     print(f"trainable parameters: {sum(p.numel() for p in trainable)/1e6:.1f}M"
           f"  ({', '.join(trainable_names)})")
@@ -504,7 +517,7 @@ def main() -> None:
         out = training_forward(model, batch, speaker_embeddings=speaker_tensor,
                                flow_copies=args.flow_copies, stop_weight=args.stop_weight,
                                dropout=dropout, generator=generator,
-                               **f0_kwargs)
+                               f0_dropout=args.f0_dropout, **f0_kwargs)
         out.loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(trainable, args.grad_clip)
         optimizer.step()

@@ -98,6 +98,7 @@ def training_forward(
     generator: torch.Generator | None = None,
     f0_conditioner: "torch.nn.Module | None" = None,
     f0_head_conditioner: "torch.nn.Module | None" = None,
+    f0_dropout: float = 0.0,
 ) -> ForwardOutput:
     """teacher forcing の1 step を計算して loss を返す。
 
@@ -155,6 +156,23 @@ def training_forward(
     finally:
         model.config.scale_acoustic_latent = scale_flag
 
+    # M4e: **sample 単位で条件を落とす。** 条件づけを入れると
+    # モデルが条件に依存するようになり、**条件が外れると素のモデルより悪くなる**
+    # （実測で輪郭 +0.019、長さ 6.81秒 対 人間 5.56秒）。実運用では良い条件を
+    # 供給できないので、**落としても劣化しない**ように学習する。
+    #
+    # patch 単位ではなく **sample 単位**で落とす。patch 単位だと
+    # 「条件がある patch と無い patch が混ざる」状態になり、推論の
+    # 「全部ある / 全部無い」と合わない。
+    target_f0 = batch.target_f0
+    if target_f0 is not None and f0_dropout > 0.0:
+        target_f0 = target_f0.to(device=device, dtype=torch.float32).clone()
+        keep = torch.rand(batch.num_samples, generator=generator,
+                          device=generator.device if generator is not None else None)
+        dropped = (keep < float(f0_dropout)).to(device)
+        if dropped.any():
+            target_f0[dropped[target_sample]] = 0.0
+
     # M4c: F0 の条件を **その patch を予測する位置** へ足す。
     #
     # 位置 i の hidden が patch i を予測するので、**patch i の F0 は位置 i の
@@ -164,10 +182,10 @@ def training_forward(
     #
     # `target_mask` が偽の target は padding / packing 境界で位置が無効なので
     # **足さない**（足すと無関係な位置を汚す）。
-    if f0_conditioner is not None and batch.target_f0 is not None:
+    if f0_conditioner is not None and target_f0 is not None:
         valid = target_mask
         if valid.any():
-            features = batch.target_f0.to(device=device, dtype=torch.float32)[valid]
+            features = target_f0.to(device=device, dtype=torch.float32)[valid]
             added = f0_conditioner(features).to(input_embeds.dtype)
             input_embeds = input_embeds.index_put(
                 (target_index[valid], target_positions[valid]),
@@ -205,9 +223,9 @@ def training_forward(
     # `speaker_adaln` は patch ごとの行を取るので、これだけで per-patch の
     # adaLN 条件になる（`diffusion_head.py` を変えずに済む）。
     head_speaker = None if speaker is None else speaker[target_sample]
-    if (f0_head_conditioner is not None and batch.target_f0 is not None
+    if (f0_head_conditioner is not None and target_f0 is not None
             and head_speaker is not None):
-        features = batch.target_f0.to(device=device, dtype=torch.float32)
+        features = target_f0.to(device=device, dtype=torch.float32)
         head_speaker = head_speaker + f0_head_conditioner(features).to(
             head_speaker.dtype)
     flow_batch: FlowBatch = build_flow_batch(

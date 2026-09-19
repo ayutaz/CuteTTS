@@ -382,3 +382,67 @@ def test_head側の条件は学習すると結果を変える():
                                generator=torch.Generator().manual_seed(7),
                                f0_head_conditioner=conditioner)
     assert float(with_f0.loss) != pytest.approx(float(without.loss), rel=1e-6)
+
+
+# ------------------------------------------------- 条件の dropout（M4e）
+#
+# 条件づけを入れるとモデルが条件に依存し、**条件が外れると素のモデルより
+# 悪くなる**（実測で輪郭 +0.019、長さ 6.81秒 対 人間 5.56秒）。
+# 実運用では良い条件を供給できないので、**落としても劣化しない**ように学習する。
+
+
+def test_dropout1なら条件が消える():
+    """全部落とすので、条件を渡さないのと同じ結果になる。
+
+    **比較の相手も dropout を通す。** 抽選は flow のノイズと同じ generator を
+    消費するので（既存の condition dropout と同じ作り）、通さない呼び出しと
+    比べると乱数列がずれて別の loss になる。
+    """
+    from cutetts.training.f0 import F0_FEATURE_DIM, F0Conditioner
+
+    model = _tiny_model()
+    batch, speaker = _batch_with_f0()
+    conditioner = F0Conditioner(PATCH * F0_FEATURE_DIM,
+                                int(model.lm_speaker_linear.out_features))
+    torch.nn.init.normal_(conditioner.proj.weight, std=0.5)
+    torch.nn.init.zeros_(conditioner.proj.bias)      # bias があると 0 入力でも動く
+
+    without = training_forward(model, batch, speaker_embeddings=speaker,
+                               generator=torch.Generator().manual_seed(7),
+                               f0_conditioner=None, f0_dropout=1.0)
+    dropped = training_forward(model, batch, speaker_embeddings=speaker,
+                               generator=torch.Generator().manual_seed(7),
+                               f0_conditioner=conditioner, f0_dropout=1.0)
+    assert float(dropped.loss) == pytest.approx(float(without.loss), rel=1e-6)
+
+
+def test_dropout0なら全部残る():
+    from cutetts.training.f0 import F0_FEATURE_DIM, F0Conditioner
+
+    model = _tiny_model()
+    batch, speaker = _batch_with_f0()
+    conditioner = F0Conditioner(PATCH * F0_FEATURE_DIM,
+                                int(model.lm_speaker_linear.out_features))
+    torch.nn.init.normal_(conditioner.proj.weight, std=0.5)
+    kept = training_forward(model, batch, speaker_embeddings=speaker,
+                            generator=torch.Generator().manual_seed(7),
+                            f0_conditioner=conditioner, f0_dropout=0.0)
+    same = training_forward(model, batch, speaker_embeddings=speaker,
+                            generator=torch.Generator().manual_seed(7),
+                            f0_conditioner=conditioner)
+    assert float(kept.loss) == pytest.approx(float(same.loss), rel=1e-6)
+
+
+def test_dropoutはbatchを壊さない():
+    """**元の batch を書き換えない**（次の step で条件が消えていては困る）。"""
+    from cutetts.training.f0 import F0_FEATURE_DIM, F0Conditioner
+
+    model = _tiny_model()
+    batch, speaker = _batch_with_f0()
+    before = batch.target_f0.clone()
+    conditioner = F0Conditioner(PATCH * F0_FEATURE_DIM,
+                                int(model.lm_speaker_linear.out_features))
+    training_forward(model, batch, speaker_embeddings=speaker,
+                     generator=torch.Generator().manual_seed(7),
+                     f0_conditioner=conditioner, f0_dropout=1.0)
+    assert torch.equal(batch.target_f0, before)

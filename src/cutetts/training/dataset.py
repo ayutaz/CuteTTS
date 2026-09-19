@@ -116,9 +116,19 @@ class F0Source:
     def __contains__(self, utterance_id: str) -> bool:
         return utterance_id in self.reader
 
+    position: bool = False
+    """**発話内の位置**（0→1）を1次元足すか（M4d）。
+
+    条件は index で並んでいるが推論は自由走行なので、話速が違うと
+    時間方向にずれる。位置を渡せばモデルが話速を合わせられる。"""
+
     def patches(self, utterance_id: str, num_patches: int) -> Tensor:
-        """``[num_patches, patch_size * 2 * lookahead]``。足りない分は 0。"""
-        from cutetts.training.f0 import lookahead_features, patch_features
+        """``[num_patches, patch_size * 2 * lookahead (+1)]``。足りない分は 0。"""
+        from cutetts.training.f0 import (
+            add_position,
+            lookahead_features,
+            patch_features,
+        )
 
         frames = self.reader.read(utterance_id)
         array = patch_features(
@@ -128,6 +138,8 @@ class F0Source:
         )
         if self.lookahead > 1:
             array = lookahead_features(array, self.lookahead)
+        if self.position:
+            array = add_position(array)
         return torch.from_numpy(array)
 
 

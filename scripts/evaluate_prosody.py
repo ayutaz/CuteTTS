@@ -164,18 +164,26 @@ def _f0_hook(path: Path, conditioner, vae, patch_size: int, device: str):
     num_patches = max(1, -(-len(features) // patch_size))
     patches = patch_features(features, patch_size=patch_size,
                              num_patches=num_patches)
-    # **先読みの数は conditioner の入力次元から復元する。**
-    # 学習と推論で食い違うと条件が別物になるので、引数では受け取らない
-    from cutetts.training.f0 import F0_FEATURE_DIM, lookahead_features
+    # **先読みと位置は conditioner の metadata から取る。**
+    # 学習と推論で食い違うと条件が別物になるので、引数では受け取らない。
+    # 入力次元からの推測もしない（位置を足すと +1 されて割り切れない）
+    from cutetts.training.f0 import F0_FEATURE_DIM, add_position, lookahead_features
 
     unit = patch_size * F0_FEATURE_DIM
-    lookahead = max(1, int(conditioner.feature_dim) // unit)
-    if int(conditioner.feature_dim) != unit * lookahead:
+    position = bool(getattr(conditioner, "position", False))
+    lookahead = getattr(conditioner, "lookahead", None)
+    if lookahead is None:                      # metadata の無い古い重み
+        lookahead = max(1, int(conditioner.feature_dim) // unit)
+    expected = unit * int(lookahead) + (1 if position else 0)
+    if int(conditioner.feature_dim) != expected:
         raise ValueError(
             f"conditioner の入力次元 {conditioner.feature_dim} が "
-            f"{unit} の倍数でない")
-    if lookahead > 1:
-        patches = lookahead_features(patches, lookahead)
+            f"期待 {expected}（unit={unit} / 先読み {lookahead} / "
+            f"位置 {position}）と合わない")
+    if int(lookahead) > 1:
+        patches = lookahead_features(patches, int(lookahead))
+    if position:
+        patches = add_position(patches)
     hook = step_embedding_hook(conditioner, patches, device=device)
     # **差し込む場所で渡す口が違う。** conditioner の metadata に従う
     return (hook, getattr(conditioner, "inject", "lm"))

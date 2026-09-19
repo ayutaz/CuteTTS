@@ -63,6 +63,7 @@ __all__ = [
     "F0_FEATURE_DIM",
     "F0_FRAMES_PER_LATENT",
     "F0_INJECT_SITES",
+    "add_position",
     "F0_LOOKAHEAD_PATCHES",
     "lookahead_features",
     "F0Conditioner",
@@ -211,6 +212,31 @@ def lookahead_features(patches: np.ndarray, lookahead: int = F0_LOOKAHEAD_PATCHE
             break
         out[:usable, offset * width:(offset + 1) * width] = array[offset:]
     return out
+
+
+def add_position(patches: np.ndarray) -> np.ndarray:
+    """patch ごとの特徴量に**発話内の位置**（0→1）を1次元足す（M4d）。
+
+    **時間のずれが疑われるから足す。** 条件は index で並んでいるが、
+    推論は自由走行なので**モデルの話速が違うと条件が時間方向にずれる**。
+    実測で oracle の長さは 4.99秒、人間は 5.56秒（**10%速い**）で、
+    35 patch の発話なら終盤で4 patch ぶんずれる。
+
+    輪郭の相関は長さを揃えてから取るので**伸縮に強い**（+0.118 改善した）が、
+    アクセント核は位置に敏感なので**動かなかった**（+0.61pt）。
+    この非対称が「届いてはいるが位置がずれている」ことを示している。
+
+    位置を渡せば、モデルは「いま全体のどこか」を知って話速を合わせられる。
+    """
+    array = np.asarray(patches, dtype=np.float32)
+    if array.ndim != 2:
+        raise ValueError(f"patches must be [N, D], got {array.shape}")
+    count = array.shape[0]
+    if count == 0:
+        return np.zeros((0, array.shape[1] + 1), dtype=np.float32)
+    # **最後の patch が 1.0 になるようにする**（0始まりだと終わりが分からない）
+    position = (np.arange(count, dtype=np.float32) / max(count - 1, 1))
+    return np.concatenate([array, position[:, None]], axis=1)
 
 
 class F0Conditioner(nn.Module):
@@ -482,6 +508,11 @@ def load_f0_conditioner(model_dir: str | Path, device: str = "cpu"):
         raise ValueError(f"未知の inject: {inject}（{F0_INJECT_SITES}）")
     module = module.to(device).eval()
     module.inject = inject
+    # **先読みと位置も metadata から読む。** 入力次元からの推測は、
+    # 位置を足すと +1 されるので割り切れなくなる
+    raw = str(metadata.get("lookahead", "")).strip()
+    module.lookahead = int(raw) if raw.isdigit() else None
+    module.position = str(metadata.get("position", "False")) == "True"
     return module
 
 
