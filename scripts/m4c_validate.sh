@@ -138,10 +138,11 @@ eval_sharded() {
 echo "=== 5/6 評価（3条件。**同じ重み**で条件だけ変える）==="
 for spec in "none| " "oracle|--f0-source oracle" "mismatch|--f0-source mismatch"; do
   IFS='|' read -r name extra <<< "$spec"
-  [ -f "/workspace/done-m4c-${name}" ] && { echo "  済み: ${name}"; continue; }
+  # **TAG を含める。** 含めないと別の条件の run の済み印を見てしまう（実際に踏んだ）
+  [ -f "/workspace/done-m4c-${TAG}-${name}" ] && { echo "  済み: ${name}"; continue; }
   echo "--- ${name} ---"
   eval_sharded "m4c-${TAG}-${name}-prosody" "$extra"
-  touch "/workspace/done-m4c-${name}"
+  touch "/workspace/done-m4c-${TAG}-${name}"
 done
 
 # ---------------------------------------------------------------- 6. 比較
