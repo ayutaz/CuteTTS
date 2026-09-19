@@ -230,6 +230,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dtype", default="bfloat16")
     parser.add_argument("--f0-cache",
                         help="F0 cache（M4c）。渡すと F0 の条件を学習する")
+    parser.add_argument("--f0-lookahead", type=int, default=1,
+                        help="条件に含める**この先の patch 数**。"
+                             "1 だと履歴から予測できてモデルが無視する（M4c）")
     parser.add_argument("--f0-lr", type=float,
                         help="F0 条件だけの学習率。省略すると本体と同じ。"
                              "**zero-init から作るので本体より大きくてよい**")
@@ -323,14 +326,16 @@ def main() -> None:
 
         patch = int(model.config.locenc_patch_size)
         hidden = int(model.lm_speaker_linear.out_features)
-        f0_conditioner = F0Conditioner(F0_FEATURE_DIM * patch, hidden).to(device)
+        width = F0_FEATURE_DIM * patch * int(args.f0_lookahead)
+        f0_conditioner = F0Conditioner(width, hidden).to(device)
         f0_conditioner = f0_conditioner.to(torch.float32)
         f0_reader = F0CacheReader(args.f0_cache)
-        f0_source = F0Source(reader=f0_reader, patch_size=patch)
+        f0_source = F0Source(reader=f0_reader, patch_size=patch,
+                             lookahead=int(args.f0_lookahead))
         f0_params = list(f0_conditioner.parameters())
         trainable += f0_params
         print(f"F0 条件: {len(f0_reader):,} 発話 / "
-              f"{F0_FEATURE_DIM * patch} → {hidden}（zero-init）"
+              f"{width} → {hidden}（zero-init / 先読み {args.f0_lookahead} patch）"
               f" lr={args.f0_lr if args.f0_lr else args.lr:g}")
     print(f"trainable parameters: {sum(p.numel() for p in trainable)/1e6:.1f}M"
           f"  ({', '.join(trainable_names)})")

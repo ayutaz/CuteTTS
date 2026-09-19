@@ -248,3 +248,48 @@ def test_zero_initの条件は生成を変えない():
 
     assert seen[:4] == [0, 1, 2, 3]          # **0始まりで1つずつ**
     assert torch.equal(plain.waveform, conditioned.waveform)
+
+
+# ---------------------------------------------------------- 先読み（M4c の2回目）
+#
+# **1回目は「その patch の F0」だけを渡して失敗した。** teacher forcing では
+# patch i-1 の真の latent が入力にあるので F0_i は履歴から予測でき、
+# 真の F0 を渡しても flow loss は 0.2% しか下がらなかった。
+# 先読みは履歴に無いので、使う動機が生まれる。
+
+
+def test_先読みは未来を並べる():
+    from cutetts.training.f0 import lookahead_features
+
+    patches = np.array([[1.0], [2.0], [3.0]], dtype=np.float32)
+    out = lookahead_features(patches, lookahead=2)
+    assert out.shape == (3, 2)
+    assert out[0].tolist() == [1.0, 2.0]      # patch 0 と 1
+    assert out[1].tolist() == [2.0, 3.0]
+    assert out[2].tolist() == [3.0, 0.0]      # 末尾は 0 埋め
+
+
+def test_先読み1は元と同じ():
+    from cutetts.training.f0 import lookahead_features
+
+    patches = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
+    assert lookahead_features(patches, lookahead=1).tolist() == patches.tolist()
+
+
+def test_先読みは過去を渡さない():
+    """**順を逆にすると意味が反転する。** 0行目に patch -1 は入らない。"""
+    from cutetts.training.f0 import lookahead_features
+
+    patches = np.array([[10.0], [20.0], [30.0], [40.0]], dtype=np.float32)
+    out = lookahead_features(patches, lookahead=3)
+    assert out[0].tolist() == [10.0, 20.0, 30.0]
+    assert out[3].tolist() == [40.0, 0.0, 0.0]
+
+
+def test_先読みの引数を検査する():
+    from cutetts.training.f0 import lookahead_features
+
+    with pytest.raises(ValueError):
+        lookahead_features(np.zeros((2, 2), dtype=np.float32), lookahead=0)
+    with pytest.raises(ValueError):
+        lookahead_features(np.zeros(4, dtype=np.float32))

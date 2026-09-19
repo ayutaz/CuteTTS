@@ -219,11 +219,15 @@ def _checked_target_f0(target_f0: Tensor | None, n_target: int, patch: int
         return None
     from cutetts.training.f0 import F0_FEATURE_DIM
 
-    expected = (int(n_target), int(patch) * F0_FEATURE_DIM)
-    if tuple(target_f0.shape) != expected:
+    unit = int(patch) * F0_FEATURE_DIM
+    if target_f0.dim() != 2 or int(target_f0.shape[0]) != int(n_target):
         raise ValueError(
-            f"target_f0 shape mismatch: expected {expected}, "
+            f"target_f0 shape mismatch: expected ({n_target}, k*{unit}), "
             f"got {tuple(target_f0.shape)}")
+    # **幅は patch*2 の倍数**（先読みを連結すると倍数になる。M4c）
+    if int(target_f0.shape[1]) % unit != 0 or int(target_f0.shape[1]) == 0:
+        raise ValueError(
+            f"target_f0 width {int(target_f0.shape[1])} は {unit} の倍数でない")
     return target_f0.to(torch.float32)
 
 

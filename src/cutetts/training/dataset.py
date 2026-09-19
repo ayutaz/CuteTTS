@@ -107,13 +107,18 @@ class F0Source:
     reader: object
     """`F0CacheReader` 互換（`read(utterance_id)`、`__contains__`）。"""
     patch_size: int = 2
+    lookahead: int = 1
+    """**この先いくつの patch の F0 を連結するか**（M4c の2回目）。
+
+    1 だとその patch だけ。teacher forcing では履歴から予測できてしまい、
+    **モデルが条件を無視する**（flow loss が 0.2% しか動かなかった）。"""
 
     def __contains__(self, utterance_id: str) -> bool:
         return utterance_id in self.reader
 
     def patches(self, utterance_id: str, num_patches: int) -> Tensor:
-        """``[num_patches, patch_size * 2]`` を返す。足りない分は 0 で埋まる。"""
-        from cutetts.training.f0 import patch_features
+        """``[num_patches, patch_size * 2 * lookahead]``。足りない分は 0。"""
+        from cutetts.training.f0 import lookahead_features, patch_features
 
         frames = self.reader.read(utterance_id)
         array = patch_features(
@@ -121,6 +126,8 @@ class F0Source:
             patch_size=self.patch_size,
             num_patches=int(num_patches),
         )
+        if self.lookahead > 1:
+            array = lookahead_features(array, self.lookahead)
         return torch.from_numpy(array)
 
 

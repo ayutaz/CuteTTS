@@ -164,6 +164,18 @@ def _f0_hook(path: Path, conditioner, vae, patch_size: int, device: str):
     num_patches = max(1, -(-len(features) // patch_size))
     patches = patch_features(features, patch_size=patch_size,
                              num_patches=num_patches)
+    # **先読みの数は conditioner の入力次元から復元する。**
+    # 学習と推論で食い違うと条件が別物になるので、引数では受け取らない
+    from cutetts.training.f0 import F0_FEATURE_DIM, lookahead_features
+
+    unit = patch_size * F0_FEATURE_DIM
+    lookahead = max(1, int(conditioner.feature_dim) // unit)
+    if int(conditioner.feature_dim) != unit * lookahead:
+        raise ValueError(
+            f"conditioner の入力次元 {conditioner.feature_dim} が "
+            f"{unit} の倍数でない")
+    if lookahead > 1:
+        patches = lookahead_features(patches, lookahead)
     return step_embedding_hook(conditioner, patches, device=device)
 
 

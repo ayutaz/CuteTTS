@@ -62,6 +62,8 @@ __all__ = [
     "default_f0_meta",
     "F0_FEATURE_DIM",
     "F0_FRAMES_PER_LATENT",
+    "F0_LOOKAHEAD_PATCHES",
+    "lookahead_features",
     "F0Conditioner",
     "f0_features",
     "features_from_waveform",
@@ -170,6 +172,44 @@ def patch_features(features: np.ndarray, patch_size: int, num_patches: int
             [array, np.zeros((need - array.shape[0], F0_FEATURE_DIM),
                              dtype=np.float32)], axis=0)
     return array[:need].reshape(int(num_patches), int(patch_size) * F0_FEATURE_DIM)
+
+
+#: 条件に含める**先読み**の patch 数（M4c の2回目）。
+#:
+#: **1回目は「その patch の F0」だけを渡して失敗した。** teacher forcing では
+#: patch i-1 の真の latent が入力に入っているので、**F0_i は履歴からほぼ
+#: 予測できる**。実測で、真の F0 を渡しても flow loss は 0.2% しか下がらず
+#: （0.8167 → 0.8149）、patch の順を入れ替えても同じだった（0.8159）。
+#: **条件が持つ限界情報が小さく、使う動機が生まれない。**
+#:
+#: 先読みは履歴に無いので、使う動機が生まれる。
+#: 4 patch = 0.64 秒。日本語のアクセント句より短く、モーラ数個ぶん。
+F0_LOOKAHEAD_PATCHES = 4
+
+
+def lookahead_features(patches: np.ndarray, lookahead: int = F0_LOOKAHEAD_PATCHES
+                       ) -> np.ndarray:
+    """patch ごとの特徴量に**この先 `lookahead` patch ぶん**を連結する。
+
+    ``patches`` は ``[N, patch_size * 2]``。返り値は
+    ``[N, patch_size * 2 * lookahead]``。末尾は 0 で埋める（無声と同じ扱い）。
+
+    **i 行目は patch i, i+1, …, i+lookahead-1 の順**に並ぶ。
+    ここを逆にすると、過去を渡すことになって意味が反転する。
+    """
+    array = np.asarray(patches, dtype=np.float32)
+    if array.ndim != 2:
+        raise ValueError(f"patches must be [N, D], got {array.shape}")
+    if lookahead < 1:
+        raise ValueError(f"lookahead must be >= 1, got {lookahead}")
+    count, width = array.shape
+    out = np.zeros((count, width * lookahead), dtype=np.float32)
+    for offset in range(lookahead):
+        usable = count - offset
+        if usable <= 0:
+            break
+        out[:usable, offset * width:(offset + 1) * width] = array[offset:]
+    return out
 
 
 class F0Conditioner(nn.Module):
