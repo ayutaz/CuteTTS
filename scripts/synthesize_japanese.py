@@ -83,7 +83,61 @@ def build_parser() -> argparse.ArgumentParser:
                         default=DEFAULT_MINIMUM_SECONDS,
                         help="referenceがこれより短ければ繰り返して伸ばす（R-026）。"
                              "0 で無効")
+    parser.add_argument("--prosody-reference",
+                        help="**韻律転写**（M4h）。この音声の F0 の輪郭を写す。"
+                             "**同じ台詞を読んだ音声を渡すこと** — 別の文の F0 を"
+                             "渡すとアクセントが壊れる（-3.78pt、有意。R-060）。"
+                             "`--reference-audio`（声質）とは別で、両方渡せる。"
+                             "checkpoint に f0_conditioner.safetensors が要る")
+    parser.add_argument("--no-prosody-roundtrip", action="store_true",
+                        help="韻律参照をVAEで往復させない。**既定では往復させる** — "
+                             "学習側の F0 は latent を decode した波形から"
+                             "取っているので、揃えないと有声判定が14%食い違う")
     return parser
+
+
+def build_prosody_kwargs(args, model) -> dict:
+    """`--prosody-reference` から `generate` へ渡す引数を作る（M4h / R-060）。
+
+    渡されていなければ空の辞書を返す。**条件づけの重みが無いのに
+    `--prosody-reference` が来たら落とす** — 黙って素通りさせると、
+    写っていないのに写ったつもりになる。
+    """
+    if not args.prosody_reference:
+        return {}
+
+    import json
+
+    from cutetts.training.f0 import load_f0_conditioner, prosody_generate_kwargs
+
+    device = model.runtime.model.device
+    conditioner = load_f0_conditioner(args.model_dir, device=str(device))
+    if conditioner is None:
+        raise SystemExit(
+            f"--prosody-reference が指定されたが "
+            f"{args.model_dir}/f0_conditioner.safetensors が無い。"
+            "韻律転写に対応した checkpoint（例: checkpoints/m4h-prosody/inference）"
+            "を使うこと")
+
+    vae = None
+    if not args.no_prosody_roundtrip:
+        from cutetts.modeling.audio_adapter import AudioAcousticVAEAdapter
+
+        vae = AudioAcousticVAEAdapter(
+            Path(args.model_dir) / "weights" / "audio_vae").to(device).eval()
+
+    patch_size = int(json.loads(
+        (Path(args.model_dir) / "config.json").read_text(encoding="utf-8")
+    )["architecture"]["locenc_patch_size"])
+
+    kwargs = prosody_generate_kwargs(args.prosody_reference, conditioner,
+                                     vae=vae, patch_size=patch_size,
+                                     device=str(device))
+    site = "head（DiTのadaLN）" if "extra_step_speaker" in kwargs else "LM入力"
+    print(f"韻律転写: {args.prosody_reference}"
+          f"（差込 {site} / 先読み {getattr(conditioner, 'lookahead', '?')} patch / "
+          f"往復 {'なし' if args.no_prosody_roundtrip else 'あり'}）")
+    return kwargs
 
 
 def main() -> None:
@@ -118,10 +172,16 @@ def main() -> None:
                   f"{args.min_reference_seconds:g}秒）")
 
     model = CuteTTS.from_pretrained(args.model_dir, device=args.device)
+
+    # M4h: 韻律転写。**同じ台詞を読んだ音声の F0 を条件として渡す。**
+    # 参照から輪郭が写るのは +0.104（有意。R-060）。
+    prosody_kwargs = build_prosody_kwargs(args, model)
+
     result = model.generate(
         spoken, mode=args.mode,
         reference_audio=reference if args.mode == "voice_clone" else None,
         seed=args.seed, max_decode_length=args.max_decode_length,
+        **prosody_kwargs,
     )
 
     seconds = result.waveform.shape[-1] / result.sample_rate

@@ -377,3 +377,67 @@ def test_MLP版は保存して読み戻せる(tmp_path):
     probe = torch.randn(3, 17)
     with torch.no_grad():
         assert torch.allclose(loaded(probe), conditioner(probe), atol=1e-6)
+
+
+def _sine(seconds: float, hz: float, rate: int) -> np.ndarray:
+    """有声判定が立つ程度に倍音のある合成音。"""
+    t = np.arange(int(seconds * rate)) / rate
+    wave = np.zeros_like(t)
+    for harmonic, gain in ((1, 1.0), (2, 0.5), (3, 0.25)):
+        wave += gain * np.sin(2 * np.pi * hz * harmonic * t)
+    return wave / np.abs(wave).max()
+
+
+def test_参照から作る条件は差込先をmetadataから決める():
+    """**合成側の入口**（`--prosody-reference`）が学習と同じ条件を作るか。
+
+    差込先を取り違えると、黙って別の場所に足して「写らない」だけになる。
+    """
+    from cutetts.training.f0 import F0Conditioner, prosody_hook_from_waveform
+    from cutetts.training.latents import LATENT_SAMPLE_RATE
+
+    wave = _sine(1.6, 200.0, LATENT_SAMPLE_RATE)
+    # 運用点と同じ形（patch 2 / 先読み 4 / 位置あり → 2*2*4 + 1 = 17）
+    conditioner = F0Conditioner(17, 32)
+    conditioner.inject, conditioner.lookahead, conditioner.position = "head", 4, True
+    hook, inject = prosody_hook_from_waveform(wave, LATENT_SAMPLE_RATE, conditioner,
+                                              patch_size=2)
+    assert inject == "head"
+    assert hook is not None
+    assert hook(0) is not None and tuple(hook(0).shape) == (1, 32)
+    # **音声より長く生成した step は素通りさせる**（無い高さを指定し続けない）
+    assert hook(10_000) is None
+
+
+def test_参照の条件は入力次元が合わないと落ちる():
+    """**黙って別物を作らない。** 先読み設定の食い違いはここで止める。"""
+    from cutetts.training.f0 import F0Conditioner, prosody_hook_from_waveform
+    from cutetts.training.latents import LATENT_SAMPLE_RATE
+
+    wave = _sine(1.0, 180.0, LATENT_SAMPLE_RATE)
+    conditioner = F0Conditioner(17, 32)
+    conditioner.inject, conditioner.lookahead, conditioner.position = "head", 2, True
+    with pytest.raises(ValueError, match="入力次元"):
+        prosody_hook_from_waveform(wave, LATENT_SAMPLE_RATE, conditioner,
+                                   patch_size=2)
+
+
+def test_参照はファイルからも渡せる(tmp_path):
+    """`prosody_generate_kwargs` が **差込先に応じた口**で返すか。"""
+    import soundfile as sf
+
+    from cutetts.training.f0 import F0Conditioner, prosody_generate_kwargs
+    from cutetts.training.latents import LATENT_SAMPLE_RATE
+
+    path = tmp_path / "ref.wav"
+    sf.write(path, _sine(1.2, 190.0, LATENT_SAMPLE_RATE), LATENT_SAMPLE_RATE)
+
+    head = F0Conditioner(17, 32)
+    head.inject, head.lookahead, head.position = "head", 4, True
+    assert set(prosody_generate_kwargs(path, head, patch_size=2)) == {
+        "extra_step_speaker"}
+
+    lm = F0Conditioner(16, 32)
+    lm.inject, lm.lookahead, lm.position = "lm", 4, False
+    assert set(prosody_generate_kwargs(path, lm, patch_size=2)) == {
+        "extra_step_embedding"}

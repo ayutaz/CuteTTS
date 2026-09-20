@@ -70,6 +70,8 @@ __all__ = [
     "f0_features",
     "features_from_waveform",
     "load_f0_conditioner",
+    "prosody_generate_kwargs",
+    "prosody_hook_from_waveform",
     "roundtrip_waveform",
     "step_embedding_hook",
     "frame_f0",
@@ -572,3 +574,79 @@ def step_embedding_hook(conditioner, patches, *, device: str = "cpu"):
             return conditioner(tensor[step:step + 1])
 
     return hook
+
+
+def prosody_hook_from_waveform(waveform: np.ndarray, sample_rate: int, conditioner,
+                               *, vae=None, patch_size: int = 2,
+                               device: str = "cpu"):
+    """参照の波形から F0 条件の step フックを作る（M4c / M4h）。
+
+    返り値は ``(hook, inject)``。``inject`` が ``"lm"`` なら
+    ``api.generate(extra_step_embedding=hook)``、``"head"`` なら
+    ``extra_step_speaker=hook`` へ渡す。
+
+    **先読みと位置は conditioner の metadata から取る**（引数では受け取らない）。
+    学習と推論で食い違うと条件が別物になる。入力次元からの推測もしない
+    （位置を足すと +1 されて割り切れない）。
+
+    **`num_patches` は与える音声の長さで決まる。** 生成がそれより長く続いた
+    step は ``None`` が返り素通りする（条件を繰り返すと、存在しない高さを
+    指定し続けることになる）。
+
+    ``vae`` を渡すと波形を VAE で往復させる。**学習側の F0 は latent を
+    decode した波形から取っている**ので、揃えないと有声判定が 14% 食い違う。
+    """
+    import torch
+    import torchaudio
+
+    from cutetts.training.latents import LATENT_SAMPLE_RATE
+
+    wave = np.asarray(waveform, dtype=np.float64)
+    if wave.ndim > 1:
+        wave = wave.mean(axis=1)
+    if int(sample_rate) != LATENT_SAMPLE_RATE:
+        wave = torchaudio.functional.resample(
+            torch.from_numpy(wave).float(), int(sample_rate), LATENT_SAMPLE_RATE
+        ).numpy()
+    if vae is not None:
+        wave = roundtrip_waveform(vae, wave)
+
+    features = features_from_waveform(np.asarray(wave, dtype=np.float64),
+                                      LATENT_SAMPLE_RATE)
+    num_patches = max(1, -(-len(features) // patch_size))
+    patches = patch_features(features, patch_size=patch_size,
+                             num_patches=num_patches)
+
+    unit = patch_size * F0_FEATURE_DIM
+    position = bool(getattr(conditioner, "position", False))
+    lookahead = getattr(conditioner, "lookahead", None)
+    if lookahead is None:                      # metadata の無い古い重み
+        lookahead = max(1, int(conditioner.feature_dim) // unit)
+    expected = unit * int(lookahead) + (1 if position else 0)
+    if int(conditioner.feature_dim) != expected:
+        raise ValueError(
+            f"conditioner の入力次元 {conditioner.feature_dim} が "
+            f"期待 {expected}（unit={unit} / 先読み {lookahead} / "
+            f"位置 {position}）と合わない")
+    if int(lookahead) > 1:
+        patches = lookahead_features(patches, int(lookahead))
+    if position:
+        patches = add_position(patches)
+    hook = step_embedding_hook(conditioner, patches, device=device)
+    return (hook, getattr(conditioner, "inject", "lm"))
+
+
+def prosody_generate_kwargs(path, conditioner, *, vae=None, patch_size: int = 2,
+                            device: str = "cpu") -> dict:
+    """参照音声のファイルから ``api.generate`` へ渡す引数を作る。
+
+    差し込む場所（``lm`` / ``head``）で**渡す口が違う**ので、
+    呼び出し側が分岐しなくて済むように辞書で返す。
+    """
+    import soundfile as sf
+
+    samples, rate = sf.read(str(path), dtype="float64")
+    hook, inject = prosody_hook_from_waveform(
+        samples, rate, conditioner, vae=vae, patch_size=patch_size, device=device)
+    return ({"extra_step_embedding": hook} if inject == "lm"
+            else {"extra_step_speaker": hook})

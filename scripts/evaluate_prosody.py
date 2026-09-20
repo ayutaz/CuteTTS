@@ -139,54 +139,16 @@ def _accent(aligner, text, human_wave, human_rate, human_f0,
 def _f0_hook(path: Path, conditioner, vae, patch_size: int, device: str):
     """1発話ぶんの F0 条件を作る（M4c）。
 
-    **`num_patches` は与える音声の長さから決める。** 生成がそれより長く
-    続いた step は `None` を返して素通りさせる（条件を繰り返すと、
-    存在しない高さを指定し続けることになる）。
+    **実体は `training.f0.prosody_hook_from_waveform`。** 合成側
+    （`synthesize_japanese.py --prosody-reference`）と**同じ実装を使う** —
+    先読み・位置・差込先は conditioner の metadata から取るので、
+    2箇所に書くと学習・評価・合成で別々の条件になりうる。
     """
-    from cutetts.training.f0 import (
-        features_from_waveform,
-        patch_features,
-        roundtrip_waveform,
-        step_embedding_hook,
-    )
-    from cutetts.training.latents import LATENT_SAMPLE_RATE
+    from cutetts.training.f0 import prosody_hook_from_waveform
 
     wave, rate = read_audio(path)
-    if rate != LATENT_SAMPLE_RATE:
-        import torchaudio
-
-        wave = torchaudio.functional.resample(
-            torch.from_numpy(wave).float(), rate, LATENT_SAMPLE_RATE).numpy()
-    if vae is not None:
-        wave = roundtrip_waveform(vae, wave)
-    features = features_from_waveform(np.asarray(wave, dtype=np.float64),
-                                      LATENT_SAMPLE_RATE)
-    num_patches = max(1, -(-len(features) // patch_size))
-    patches = patch_features(features, patch_size=patch_size,
-                             num_patches=num_patches)
-    # **先読みと位置は conditioner の metadata から取る。**
-    # 学習と推論で食い違うと条件が別物になるので、引数では受け取らない。
-    # 入力次元からの推測もしない（位置を足すと +1 されて割り切れない）
-    from cutetts.training.f0 import F0_FEATURE_DIM, add_position, lookahead_features
-
-    unit = patch_size * F0_FEATURE_DIM
-    position = bool(getattr(conditioner, "position", False))
-    lookahead = getattr(conditioner, "lookahead", None)
-    if lookahead is None:                      # metadata の無い古い重み
-        lookahead = max(1, int(conditioner.feature_dim) // unit)
-    expected = unit * int(lookahead) + (1 if position else 0)
-    if int(conditioner.feature_dim) != expected:
-        raise ValueError(
-            f"conditioner の入力次元 {conditioner.feature_dim} が "
-            f"期待 {expected}（unit={unit} / 先読み {lookahead} / "
-            f"位置 {position}）と合わない")
-    if int(lookahead) > 1:
-        patches = lookahead_features(patches, int(lookahead))
-    if position:
-        patches = add_position(patches)
-    hook = step_embedding_hook(conditioner, patches, device=device)
-    # **差し込む場所で渡す口が違う。** conditioner の metadata に従う
-    return (hook, getattr(conditioner, "inject", "lm"))
+    return prosody_hook_from_waveform(wave, rate, conditioner, vae=vae,
+                                      patch_size=patch_size, device=device)
 
 
 def build_parser() -> argparse.ArgumentParser:
