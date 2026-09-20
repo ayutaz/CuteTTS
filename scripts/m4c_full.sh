@@ -22,6 +22,12 @@ set -euo pipefail
 WORKDIR="${WORKDIR:-/workspace/CuteTTS}"
 STEPS="${STEPS:-30000}"
 WORKERS="${WORKERS:-16}"
+LOOKAHEAD="${LOOKAHEAD:-4}"
+INJECT="${INJECT:-head}"
+POSITION="${POSITION:-1}"
+DROPOUT="${DROPOUT:-0.1}"
+MLP="${MLP:-0}"
+F0LR="${F0LR:-2e-4}"
 FRONTEND="${FRONTEND:-accent}"
 SHARDS="${SHARDS:-2}"
 CER_SHARDS="${CER_SHARDS:-3}"
@@ -57,23 +63,42 @@ LINES="$(wc -l < "$MANIFEST")"
   echo "manifestの行数が違う（期待 286864、実際 $LINES）" >&2; exit 1; }
 
 # ---------------------------------------------------------------- 1. F0 cache
-# **一番重い段。** 実測 50× 実時間（A10 / 16 workers。律速は CPU の harvest）
-# なので 325.9h で約6.5時間。`--manifest` を渡さないので dev/test も作る
-# （392.8h ぶん ≒ 7.9時間）。**検証で作った分は id が重複するので飛ばす。**
+# **一番重い段。** 律速は CPU の harvest なので、コア数で決まる
+# （16 workers で 50× / 12 workers で 23× の実測）。
+# **train と dev だけ作る**（test は学習にも dev 評価にも使わない）。
 # 既にある id は飛ばすので、途中で落ちても同じコマンドで再開できる。
+F0_MANIFEST="${MANIFEST%.jsonl}-f0.jsonl"
+if [ ! -f "$F0_MANIFEST" ]; then
+  python - "$MANIFEST" "$F0_MANIFEST" <<'PYEOF'
+import json
+import sys
+
+source, target = sys.argv[1], sys.argv[2]
+kept = 0
+with open(source, encoding="utf-8") as src, open(target, "w", encoding="utf-8") as dst:
+    for line in src:
+        row = json.loads(line)
+        if str(row.get("split", "")).startswith(("train", "dev")):
+            dst.write(line)
+            kept += 1
+print(f"  F0 を作る対象: {kept:,} 行（test は除く）")
+PYEOF
+fi
+
 echo "=== 1/4 F0 cache（325.9h）==="
 python -u scripts/cache_f0_targets.py --latent-cache "$LATENTS" --out "$F0" \
-  --model-dir "$MODEL" --device cuda --workers "$WORKERS" --report-every 2000
+  --model-dir "$MODEL" --manifest "$F0_MANIFEST" --device cuda \
+  --workers "$WORKERS" --report-every 2000
 
 # ---------------------------------------------------------------- 2. 学習
 if [ -d "$OUT/inference" ]; then
   echo "=== 2/4 学習は済み ==="
 else
-  echo "=== 2/4 学習（${STEPS} step / frontend=${FRONTEND}）==="
+  echo "=== 2/4 学習（${STEPS} step / ${FRONTEND} / 先読み ${LOOKAHEAD} / 差込 ${INJECT} / dropout ${DROPOUT}）==="
   python -u scripts/train_continual.py \
     --manifest "$MANIFEST" --latent-cache "$LATENTS" --speaker-cache "$SPEAKERS" \
     --model-dir "$MODEL" --param-dtype float32 --frontend "$FRONTEND" \
-    --f0-cache "$F0" --f0-lr 2e-4 \
+    --f0-cache "$F0" --f0-lr "$F0LR" --f0-lookahead "$LOOKAHEAD" --f0-inject "$INJECT" --f0-dropout "$DROPOUT" --f0-mlp "$MLP" ${POSITION:+--f0-position} \
     --steps "$STEPS" --batch-size 4 --lr 2e-5 --seed 42 \
     --save-every "$STEPS" --export-every-save --eval-every 1000 \
     --out "$OUT"
