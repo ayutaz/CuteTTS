@@ -248,11 +248,23 @@ class F0Conditioner(nn.Module):
     既にできている部分を壊す。
     """
 
-    def __init__(self, feature_dim: int, hidden_dim: int) -> None:
+    def __init__(self, feature_dim: int, hidden_dim: int, *,
+                 mlp_dim: int = 0) -> None:
         super().__init__()
         self.feature_dim = int(feature_dim)
         self.hidden_dim = int(hidden_dim)
-        self.proj = nn.Linear(self.feature_dim, self.hidden_dim, bias=True)
+        self.mlp_dim = int(mlp_dim)
+        if self.mlp_dim > 0:
+            # **容量を増やす版**（M4g）。最後の層だけ zero-init すれば
+            # 出力は 0 から始まるので、恒等から始まる性質は保たれる
+            self.body = nn.Sequential(
+                nn.Linear(self.feature_dim, self.mlp_dim, bias=True),
+                nn.GELU(),
+            )
+            self.proj = nn.Linear(self.mlp_dim, self.hidden_dim, bias=True)
+        else:
+            self.body = nn.Identity()
+            self.proj = nn.Linear(self.feature_dim, self.hidden_dim, bias=True)
         nn.init.zeros_(self.proj.weight)
         nn.init.zeros_(self.proj.bias)
 
@@ -261,7 +273,7 @@ class F0Conditioner(nn.Module):
             raise ValueError(
                 f"features must be [N, {self.feature_dim}], "
                 f"got {tuple(features.shape)}")
-        return self.proj(features.to(self.proj.weight.dtype))
+        return self.proj(self.body(features.to(self.proj.weight.dtype)))
 
 
 # --- cache ------------------------------------------------------------------
@@ -499,7 +511,13 @@ def load_f0_conditioner(model_dir: str | Path, device: str = "cpu"):
         return None
     state = load_file(str(path))
     weight = state["proj.weight"]
-    module = F0Conditioner(int(weight.shape[1]), int(weight.shape[0]))
+    # **MLP 版は `body.0.weight` を持つ。** 形から復元する
+    body = state.get("body.0.weight")
+    if body is None:
+        module = F0Conditioner(int(weight.shape[1]), int(weight.shape[0]))
+    else:
+        module = F0Conditioner(int(body.shape[1]), int(weight.shape[0]),
+                               mlp_dim=int(body.shape[0]))
     module.load_state_dict(state, strict=True)
     with safe_open(str(path), framework="pt") as handle:
         metadata = handle.metadata() or {}

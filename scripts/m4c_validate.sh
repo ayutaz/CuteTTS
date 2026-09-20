@@ -44,6 +44,8 @@ LOOKAHEAD="${LOOKAHEAD:-1}"
 INJECT="${INJECT:-lm}"
 POSITION="${POSITION:-}"
 DROPOUT="${DROPOUT:-0}"
+MLP="${MLP:-0}"
+F0LR="${F0LR:-2e-4}"
 
 if [ -z "${HF_TOKEN:-}" ]; then
   echo "HF_TOKEN が要る" >&2
@@ -119,11 +121,11 @@ python -u scripts/cache_f0_targets.py --latent-cache "$LATENTS" --out "$F0" \
 if [ -d "$OUT/inference" ]; then
   echo "=== 4/6 学習は済み ==="
 else
-  echo "=== 4/6 学習（${STEPS} step / frontend=${FRONTEND} / 先読み ${LOOKAHEAD} / 差込 ${INJECT}${POSITION:+ / 位置} / dropout ${DROPOUT}）==="
+  echo "=== 4/6 学習（${STEPS} step / frontend=${FRONTEND} / 先読み ${LOOKAHEAD} / 差込 ${INJECT}${POSITION:+ / 位置} / dropout ${DROPOUT} / MLP ${MLP} / f0lr ${F0LR}）==="
   python -u scripts/train_continual.py \
     --manifest "$SUBSET" --latent-cache "$LATENTS" --speaker-cache "$SPEAKERS" \
     --model-dir "$MODEL" --param-dtype float32 --frontend "$FRONTEND" \
-    --f0-cache "$F0" --f0-lr 2e-4 --f0-lookahead "$LOOKAHEAD" --f0-inject "$INJECT" --f0-dropout "$DROPOUT" ${POSITION:+--f0-position} \
+    --f0-cache "$F0" --f0-lr "$F0LR" --f0-lookahead "$LOOKAHEAD" --f0-inject "$INJECT" --f0-dropout "$DROPOUT" --f0-mlp "$MLP" ${POSITION:+--f0-position} \
     --steps "$STEPS" --batch-size 4 --lr 2e-5 --seed 42 \
     --save-every "$STEPS" --export-every-save --eval-every 1000 \
     --out "$OUT"

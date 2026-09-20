@@ -331,3 +331,49 @@ def test_空でも形は合う():
     from cutetts.training.f0 import add_position
 
     assert add_position(np.zeros((0, 4), dtype=np.float32)).shape == (0, 5)
+
+
+# ------------------------------------------------------- 容量を増やした条件（M4g）
+#
+# **M4f で「条件には核が入っている」と分かった**（12.5 Hz へ畳んでも 86.4%）。
+# 足りないのは受け取り側で、oracle の追随度は上限の 40% しかない。
+
+
+def test_MLP版もzero_initから始まる():
+    """**最後の層だけ zero-init すれば恒等から始まる。**"""
+    from cutetts.training.f0 import F0Conditioner
+
+    conditioner = F0Conditioner(8, 16, mlp_dim=32)
+    out = conditioner(torch.randn(4, 8))
+    assert out.shape == (4, 16)
+    assert torch.all(out == 0.0)
+
+
+def test_MLP版は学習すると動く():
+    from cutetts.training.f0 import F0Conditioner
+
+    conditioner = F0Conditioner(8, 16, mlp_dim=32)
+    torch.nn.init.normal_(conditioner.proj.weight, std=0.5)
+    assert float(conditioner(torch.randn(4, 8)).abs().sum()) > 0.0
+
+
+def test_MLP版は保存して読み戻せる(tmp_path):
+    """**形から復元する。** 読み違えると別のモジュールになる。"""
+    from safetensors.torch import save_file
+
+    from cutetts.training.f0 import F0Conditioner, load_f0_conditioner
+
+    conditioner = F0Conditioner(17, 256, mlp_dim=64)
+    torch.nn.init.normal_(conditioner.proj.weight, std=0.1)
+    state = {k: v.detach().cpu().contiguous()
+             for k, v in conditioner.state_dict().items()}
+    save_file(state, str(tmp_path / "f0_conditioner.safetensors"),
+              metadata={"inject": "head", "lookahead": "4", "position": "True"})
+    loaded = load_f0_conditioner(tmp_path)
+    assert loaded is not None
+    assert loaded.feature_dim == 17 and loaded.hidden_dim == 256
+    assert loaded.mlp_dim == 64
+    assert loaded.inject == "head" and loaded.lookahead == 4 and loaded.position
+    probe = torch.randn(3, 17)
+    with torch.no_grad():
+        assert torch.allclose(loaded(probe), conditioner(probe), atol=1e-6)

@@ -233,6 +233,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dtype", default="bfloat16")
     parser.add_argument("--f0-cache",
                         help="F0 cache（M4c）。渡すと F0 の条件を学習する")
+    parser.add_argument("--f0-mlp", type=int, default=0,
+                        help="条件づけの層を MLP にする（中間次元。M4g）。"
+                             "**0 なら線形1層**。最後の層は zero-init のまま")
     parser.add_argument("--f0-position", action="store_true",
                         help="発話内の位置を条件に足す（M4d）。"
                              "**時間のずれを直す狙い**")
@@ -345,7 +348,8 @@ def main() -> None:
         width = F0_FEATURE_DIM * patch * int(args.f0_lookahead)
         if args.f0_position:
             width += 1                     # M4d: 発話内の位置
-        f0_conditioner = F0Conditioner(width, hidden).to(device)
+        f0_conditioner = F0Conditioner(
+            width, hidden, mlp_dim=int(args.f0_mlp)).to(device)
         f0_conditioner = f0_conditioner.to(torch.float32)
         # **保存時に metadata へ書く。** 推論側は出力次元から推測しない
         f0_conditioner.inject = args.f0_inject
@@ -363,7 +367,8 @@ def main() -> None:
               f"{width} → {hidden}（zero-init / 先読み {args.f0_lookahead} patch"
               f" / 差込 {args.f0_inject}"
               f"{' / 位置あり' if args.f0_position else ''}"
-              f"{f' / dropout {args.f0_dropout}' if args.f0_dropout else ''}）"
+              f"{f' / dropout {args.f0_dropout}' if args.f0_dropout else ''}"
+              f"{f' / MLP {args.f0_mlp}' if args.f0_mlp else ''}）"
               f" lr={args.f0_lr if args.f0_lr else args.lr:g}")
     print(f"trainable parameters: {sum(p.numel() for p in trainable)/1e6:.1f}M"
           f"  ({', '.join(trainable_names)})")
