@@ -85,6 +85,14 @@ CER5.4GiB なので3並列が載る。
 **条件の効果は `oracle` 対 `none` で見る。** `mismatch` 比では
 **mismatch が壊れるだけで「改善」に見えてしまう**（M4g の基準の失敗。R-060）。
 
+ロード確認済み（CPU / `strict=True`）。条件づけは metadata から復元される:
+`inject=head` / `lookahead=4` / `position=True` / 17 → 256（4,608パラメータ）。
+
+**本番の F0 cache は `data/s1v2/f0-v2/` にローカル退避してある**（79 MB /
+252,415発話）。**作るのに CPU で 7.5時間かかる**（45.5× 実時間）ので、
+325.9h で条件づけを学習し直すときは**必ずこれを使う**。
+`cache_f0_targets.py` は既存の id を飛ばすので、そのまま `--out` に渡せばよい。
+
 **M4c 期の条件の重みは `checkpoints/m4c-conditioners/` にある**
 （`head4.safetensors`: 17.9h / 10,000 step）。**単体では使えない** —
 一緒に学習した TTS の重みを持ち帰っていない。実験の記録として残してある。
