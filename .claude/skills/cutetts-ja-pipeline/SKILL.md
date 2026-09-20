@@ -205,6 +205,19 @@ data/raw/moe/info.csv         # 同上の話者一覧
 | d1 | `d1_data_scale.sh` | **要** | HF（latent cache）+ `HF_TOKEN` | 部分集合づくり → 30,000 step 学習 → CER・抑揚評価 |
 | t1 | `t1_lr_sweep.sh` | **要** | HF（latent cache）+ `HF_TOKEN` | vast.ai上で学習4水準 + 評価を完結（評価は `--shard` 並列） |
 | t2 | `t2_capacity_sweep.sh` | **要** | 同上 | batch size / 学習対象の3条件を学習 + 評価（`train_continual.py --trainable` で head凍結）。`SKIP_TRAIN=1` で評価だけ再開 |
+| m4a | `m4a_one_condition.sh` | **要** | HF（latent cache）+ `HF_TOKEN` | **frontend 1条件を学習して測る汎用ランナー**。`NAME` / `FRONTEND` / `BATCH` / `STEPS` を環境変数で渡す |
+| m4a | `m4a_factor_split.sh` | **要** | 同上 | 要因分解（`kana_full` / `accent_shuffled` / `accent_clean`）をまとめて回す |
+| m4a | `m4a_aligner_evals.sh` | **要** | 同上 | **アライナを使う評価だけを2 shard**で回す（3本は CUDA OOM で文が落ちる） |
+| a1 | `build_accent_pair_set.py` | 不要 | gol metadata | `data/eval/accent_pair_set_v1.json`（**片仮名は同一で核だけ違う**60組） |
+| a1 | `evaluate_accent_pairs.py` | **要** | 最小対set, checkpoint | 対の区別（`pair_differentiated`）と対辞書の正解（`pair_correct`）。**seed 3回の多数決** |
+| m4c | `cache_f0_targets.py` | **要** | latent cache + VAE | latent を decode して F0 を作る（**音声は置いていない**ので decode が要る）。GPU と CPU を並べる |
+| m4c | `m4c_validate.sh` | **要** | 同上 + `HF_TOKEN` | **経路の検証**（17.9h / 10,000 step）。`LOOKAHEAD` / `INJECT` / `POSITION` / `DROPOUT` を環境変数で渡す |
+| m4c | `m4c_full.sh` | **要** | 同上 | 本番（325.9h）。**検証が通ってから回す** |
+| m4c | `diagnose_f0_conditioning.py` | **要** | checkpoint + F0 cache | **モデルが条件を使っているか**を flow loss で見る（真の F0 / ゼロ / 順を入れ替え） |
+| m4c | `calibrate_contour_metric.py` | **要** | 評価set + 音声 | **輪郭の指標の上限**を4段の階段で測る（同一音声 / VAE往復 / 別テイク / 別の文） |
+| m4c | `calibrate_accent_metric.py` | **要** | 同上 | アクセント核の指標の上限（**往復 75.0% > 天井 64.5%** なので指標として使える） |
+| m4c | `compare_prosody_runs.py` | 不要 | `artifacts/prosody/*/metrics.json` | 抑揚の**対応のある比較**（テキストで対応付け・信頼区間つき） |
+| m4b | `train_f0_predictor.py` | 不要（CPUで足りる） | F0 cache + manifest | テキスト → 長さを正規化した輪郭。**辞書・床と比べる** |
 
 **依存順序**: `prepare_japanese_manifest` → `cache_audio_latents` → `build_voice_clusters`
 → `train_continual` → `diagnose_flow_loss` / `evaluate_japanese_cer` / `check_reference_following`。
@@ -368,6 +381,11 @@ yes | vastai destroy instance <id>
 
 | 症状 | 原因と対処 |
 |---|---|
+| **条件づけがまったく効かない** | teacher forcing では **patch i-1 の真の latent が入力にある**ので、その patch の F0 は履歴から予測できる。真の F0 を渡しても flow loss が 0.2% しか動かず、**順を入れ替えたものと区別が付かない**（R-051）。**先読み（この先 K patch）を渡す**と効く |
+| **条件の効果を `none` と比べて過大評価する** | 条件づけを入れるとモデルが依存し、**条件が外れると素より悪くなる**。`none` と比べると「条件があること」の効果が混ざる。**正しい基準線は `mismatch`**（別の文の条件を与えたもの） |
+| **条件を落として学習したら効果ごと消えた** | 依存と能力は同じもの。`--f0-dropout 0.5` では条件を使わなくなる（+0.018、有意差なし）。**0.1 なら効果を91%保つ**（R-057） |
+| **輪郭の相関が 0.4 程度で頭打ちになる** | **指標の上限**。同じ発話を VAE で往復させるだけで +0.367 まで落ちる（R-050）。生成音声は必ず VAE を通るので**それ以上は出ない**。M2 の「天井 +0.382」は人間の再現度ではなく上限そのもの |
+| **`speaker_adaln` 経由の条件に勾配が流れない** | zero-init のままだと gate が 0 で枝ごと消え、`W_gate = 0` なので speaker へ勾配が来ない。公開checkpointでは学習済み（\|w\| 平均 2.06e-02）なので実機では問題ないが、**tiny model のテストでは明示的に学習済みへ見立てる**必要がある |
 | **flow loss が 0.01 を下回る** | ほぼ確実に異常。flow matching は velocity を完全には当てられない。「常に0を出す予測器」の loss が約2.0なので、0.003 は決定係数0.998に相当し原理的に到達できない。`diagnose_flow_loss.py` で train / dev / 未学習base を同じ経路で測る |
 | 学習は進むのにモデルが悪化する | `PairSampler.sample()` を step ごとに呼んでいる。**呼ぶたびにRNGを作り直す仕様**なので毎回同じペアが返る。`iter_pairs()` の stream を1本持って `islice` で引く。`tests/training/test_pair_stream.py` が検知する |
 | stop loss が 0.0000 になる | 上と同じ原因の可能性が高い。少数sampleの丸暗記 |
