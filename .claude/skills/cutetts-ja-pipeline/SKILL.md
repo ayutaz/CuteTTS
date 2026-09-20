@@ -88,6 +88,24 @@ CER5.4GiB なので3並列が載る。
 ロード確認済み（CPU / `strict=True`）。条件づけは metadata から復元される:
 `inject=head` / `lookahead=4` / `position=True` / 17 → 256（4,608パラメータ）。
 
+**使い方**:
+
+```bash
+python scripts/synthesize_japanese.py   --model-dir checkpoints/m4h-prosody/inference   --text "..."   --reference-audio <声質の参照>   --prosody-reference <**同じ台詞を読んだ**音声>   --output out.wav
+```
+
+`--reference-audio`（声質）と `--prosody-reference`（韻律）は**別物**で、
+両方渡せる。条件の組み立ては `training.f0.prosody_generate_kwargs` にあり、
+**`evaluate_prosody.py` と同じ実装を使う**（先読み・位置・差込先は
+conditioner の metadata から取るので、2箇所に書くと学習・評価・合成で
+別の条件になる）。
+
+**参照は必ずその文の読みにする。** 別の文の F0 を渡すとアクセントが
+**-3.78pt 壊れる**（有意。R-060）。
+
+**条件づけの重みが無い checkpoint に `--prosody-reference` を渡すと落ちる。**
+黙って素通りさせると、写っていないのに写ったつもりになる。
+
 **本番の F0 cache は `data/s1v2/f0-v2/` にローカル退避してある**（79 MB /
 252,415発話）。**作るのに CPU で 7.5時間かかる**（45.5× 実時間）ので、
 325.9h で条件づけを学習し直すときは**必ずこれを使う**。
@@ -391,6 +409,11 @@ ssh -p <port> root@<host> 'cd /workspace/CuteTTS && tar czf - artifacts/s0-*' | 
 # 破棄（確認プロンプトが出るので yes を渡す）
 yes | vastai destroy instance <id>
 ```
+
+**`git archive` は `core.autocrlf=true` だと CRLF に変換する。**
+shellスクリプトを送ると `set: pipefail: invalid option name` で落ちる
+（bash が `pipefail` を読む）。**`git -c core.autocrlf=false archive` を使う。**
+Pythonは CRLF でも動くので、**shellスクリプトだけが静かに壊れる。**
 
 **リモート実行で必ず守ること**
 
