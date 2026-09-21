@@ -1,4 +1,16 @@
-[日本語](README.md) | [EN](README_en.md) | [中文](README_zh.md)
+[日本語](README.md) | [English (upstream)](README_en.md) | [中文 (upstream)](README_zh.md)
+
+> **This is the upstream CuteTTS README, kept as-is（上游 CuteTTS 的 README，原样保留）。**
+>
+> You are looking at **CuteTTS-jp**, a fork that continually trains the public
+> `OPPOer/CuteTTS` checkpoint on Japanese. The fork adds
+> `src/cutetts/training/`, `scripts/` and `tests/`; the inference path below is
+> unchanged. Reading CER went from 30.94% to **7.58%** against a human floor of
+> 5.59%, and prosody transfer from a human recording of the same line was added.
+>
+> The fork's own documentation is in Japanese:
+> **[README.md](README.md)** (overview) and
+> **[docs/](docs/README.md)** (measurements, risks and decisions).
 
 ## <sup><sup><sup><img src="assets/logo.png" alt="CuteTTS logo" height="72" align="middle"></sup></sup></sup> CuteTTS：基于连续潜变量自回归建模的高效高质量语音合成
 
