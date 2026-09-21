@@ -27,7 +27,7 @@ GOL_REPO="midralab/gol-dataset"
 
 # S1 の選定 5 game（326.0 h / 1,197話者ID / 214.8 GB）。
 # 大きい game は _partN に分割されているので実ファイルは 7 本。
-# 選定根拠は docs/japanese-training/03-data-and-frontend.md を参照。
+# 選定根拠は docs/japanese-training/data-and-frontend.md を参照。
 GOL_FILES=(
   "9381931FAB68786161D5A740F32C5A33_part1.tar"   # 93.0h / 249話者
   "9381931FAB68786161D5A740F32C5A33_part2.tar"

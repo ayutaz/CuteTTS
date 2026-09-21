@@ -24,7 +24,7 @@ speaker identity が追随していれば 自己 > 他者 になる。
 両者に差が無ければ、reference は無視され固定の声が出ている。
 
 reference の音声は **latent cache から VAE decode して作る**。生データの
-音声はライセンス上インスタンスへ置かないため（08章「artifactの公開制限」）、
+音声はライセンス上インスタンスへ置かないため（execution-log「artifactの公開制限」）、
 学習に使ったのと同じ latent から再構成する。VAE は freeze なので
 再構成音の話者性は保たれる（P1c: speaker cos 0.939）。
 
@@ -184,7 +184,7 @@ def main() -> None:
         "passed": passed,
     })
     print(f"完了: {run_dir}")
-    print("注意: audio/ はライセンス上コミット・公開しないこと（08章）")
+    print("注意: audio/ はライセンス上コミット・公開しないこと（execution-log）")
 
 
 if __name__ == "__main__":

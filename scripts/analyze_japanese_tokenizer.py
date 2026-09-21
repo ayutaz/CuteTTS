@@ -14,8 +14,8 @@
 
 """P1b: 公式SentencePiece Tokenizerの日本語coverage測定。
 
-``docs/japanese-training/08-execution-plan.md`` の P1b と
-``docs/japanese-training/02-continual-training-strategy.md`` 第4節 (T0) を実装する。
+``docs/japanese-training/execution-log.md`` の P1b と
+``docs/japanese-training/risks-and-decisions.md`` 第4節 (T0) を実装する。
 
 測るもの:
 
@@ -1124,7 +1124,7 @@ BRANCH_LABELS = {
 
 
 def recommend_branch(metrics: dict[str, Any], thresholds: dict[str, float]) -> dict[str, Any]:
-    """02章第4節の3分岐のうち、coverage実測から選べるものを決める。
+    """risks-and-decisions第4節の3分岐のうち、coverage実測から選べるものを決める。
 
     分岐3（reading/G2P）は「読み精度」の問題であり、coverage測定では判定できない。
     ここでは分岐1と2だけを決め、3は別ゲート（S0の聴取・CER）へ回すことを明示する。
@@ -1474,7 +1474,7 @@ def render_report(metrics: dict[str, Any]) -> str:
     add("")
     add(f"**分岐 {decision['branch']}: {decision['branch_label']}**")
     add("")
-    add("次のS0では、この結論に基づき入力テキスト形式を決める（02章 J0 / J1 / J2）。")
+    add("次のS0では、この結論に基づき入力テキスト形式を決める（risks-and-decisions J0 / J1 / J2）。")
     add("")
     return "\n".join(lines) + "\n"
 

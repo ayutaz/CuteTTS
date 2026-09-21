@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "cutetts"
 version = "0.1.0"
-description = "Inference and local web demo for CuteTTS"
+description = "CuteTTS-jp: Japanese continual training for CuteTTS"
 readme = "README.md"
 # 3.12 に固定する。torch 2.5.1 の対応は 3.9〜3.12 で、">=3.10" では
 # 3.13 / 3.14 を許してしまい実態と合わない（システム既定の3.14では動かない）。

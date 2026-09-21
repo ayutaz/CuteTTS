@@ -1,19 +1,20 @@
-# 対応計画（実行フェーズ定義）
+# 実行の記録
 
-最終更新: 2026-09-13
+最終更新: 2026-09-21
 
 ## この文書の位置づけ
 
-[05-experiment-roadmap.md](05-experiment-roadmap.md) が「どの順序で不確定要素を減らすか」という
-実験設計であるのに対し、この文書は **各フェーズで何を作り、何をもって完了とするか** を定義します。
+**各フェーズで何を作り、何をもって完了とし、結果がどうだったか**を1つずつ残します。
 
 - 目的: そのフェーズが答えを出す問い
-- ゴール: 測定可能な完了条件。これを満たすまで次フェーズへ進まない
+- ゴール: 測定可能な完了条件。**結果を見る前に決める**
 - 成果物: 実際に残るファイル・checkpoint・評価artifact
-- 判断ゲート: フェーズ終了時に確定させる意思決定（[07-risks-and-decisions.md](07-risks-and-decisions.md) のIDと対応）
+- 判断ゲート: フェーズ終了時に確定させる意思決定（[risks-and-decisions.md](risks-and-decisions.md) のIDと対応）
+
+**ゴールを結果より先に書くのが規約です。** 事後に基準を動かすと、
+何を確かめたのか分からなくなります（実際に一度やりました。R-022）。
 
 状態表記は他の文書と同じく **確認済み / 決定済み / 提案 / 未確定** を使います。
-この文書に書かれたスクリプト名・ディレクトリ構成・判定手順は、特記のない限り **提案** です。
 
 ## 全体像
 
@@ -45,7 +46,7 @@
 base比 **-15.77pt**（95%CI [-15.49, -12.75]、600文中457文で改善）。
 TTS由来の誤りは **25.5pt → 9.7pt（62%削減）**。
 
-**素のCERはASRの表記選択を誤りと数える**（[R-029](07-risks-and-decisions.md)）。
+**素のCERはASRの表記選択を誤りと数える**（[R-029](risks-and-decisions.md)）。
 読みへ直して測ると base比 **-17.56pt**（95%CI [-18.89, -16.31]）で、
 床との差も **7.79pt**。**学習の効果は素CERで見るより大きい。**
 
@@ -62,7 +63,7 @@ TTS由来の誤りは **25.5pt → 9.7pt（62%削減）**。
 
 ### 何が律速しているか（実測で並べた）
 
-**S1の失敗はデータ不足ではなく学習実装のバグだった**（[R-020](07-risks-and-decisions.md)）。
+**S1の失敗はデータ不足ではなく学習実装のバグだった**（[R-020](risks-and-decisions.md)）。
 以降の測定で、効いた順は次のとおり。
 
 | 手段 | 効果 | 学習の要否 |
@@ -80,7 +81,7 @@ TTS由来の誤りは **25.5pt → 9.7pt（62%削減）**。
 | **抑揚が不自然** | **40%** | **測れるようになった**（M1）。学習で輪郭の相関 +0.024→+0.122（有意）。**まだ人間に届いていない** |
 | **アクセントが違う** | **30%** | **測れるようになった**（M1）。学習で対人間 35.2%→43.6%（有意）。**まだ人間に届いていない** |
 
-誤読の主因は **byte-fallback による文字の分解**（[R-027](07-risks-and-decisions.md)）。
+誤読の主因は **byte-fallback による文字の分解**（[R-027](risks-and-decisions.md)）。
 `華` は単独pieceを持たず3つのバイト断片になり、モデルは文字として見ていない。
 仮名に置き換えると `中華`→`ちゅうか`、`湊`→`みなと` が直る。**再学習を要しない。**
 
@@ -97,7 +98,7 @@ TTS由来の誤りは **25.5pt → 9.7pt（62%削減）**。
 | ~~T1~~ | 学習率の探索 | lr=2e-5 は凍結時代の値。最適値は別か | 要 | **完了**（R-035 / D-043）。**梃子ではなかった。** 半分と5倍は有意に悪く、2.5倍は区別できない。抑揚・アクセントはどの水準も有意差なし |
 | ~~T2~~ | batch size / 学習対象 | 他のハイパーパラメータに余地があるか | 要 | **完了**（R-036 / D-044）。**梃子ではなかった。** 同じ計算量なら batch 4 と 16 は区別できない。head凍結は有意に悪い |
 | ~~M1~~ | 抑揚・アクセントの測定 | CERの外にある指摘（40%/30%）をどう測るか | 不要 | **完了**（240文 / 53話者）。抑揚・アクセントとも学習で有意に改善。T1の判定に使える（輪郭の検出限界 0.045） |
-| ~~F1~~ | 評価を実運用と揃える | 文書の主値は frontend 込みか | 不要 | **完了**。実運用の主値は読みCER **12.36%**（比較用は 13.38%） |
+| ~~F1~~ | 評価を実運用と揃える | 文書の主値は frontend 込みか | 不要 | **完了**。当時の主値は 12.36%（**現在は `--frontend accent` の 7.58%**） |
 | ~~G1~~ | 停止の健全性を指標化する | 文末の繰り返しはどのくらい出ているか | 不要 | **完了**（R-040）。base 3.2% → 現行 1.2%（-2.00pt、有意）。**試聴の44%は評価setでは再現しない** |
 | **M3** | 抑揚に効く手段を設計する | 何が抑揚を動かすのか | 要 | **設計済み**（2026-09-18）。**韻律はテキストから決まらない**という読みに至った。決定的な診断 **M3b**（参照＝同じ台詞の別テイク）をGPU一式に入れた |
 | ~~F2~~ | frontend の音への効果 | J3→J2 の修正は音に効くか / J3 はアクセントを壊すか | 要（軽） | **完了**。数詞 **-11.44pt**（有意）。アクセントは -3.00pt で**判定不能**。喋り続けは参照音声に依存しない |
@@ -136,7 +137,7 @@ F2 + M3b → D2 → C1 → T3。**9段すべて完了した。**
 
 | ID | 結論 |
 |---|---|
-| F1 | 評価は既定で frontend を適用していない。実運用の主値は **12.36%** |
+| F1 | 評価は既定で frontend を適用していない。当時の実運用の主値は 12.36%（**その後 M4a で 7.58% へ更新**） |
 | M2 | 天井は **輪郭 +0.38 / アクセント 64.5%**。現行は輪郭で隔たりの約32%（R-037 / D-045） |
 | D1 | データ量は 30,000 step では梃子（**-3.82pt**）。抑揚は動かない（R-038 / D-046） |
 | G1 | 喋り続けを指標化。base 3.2% → 現行 1.2%（**-2.00pt**、有意。R-040） |
@@ -241,7 +242,7 @@ F2 + M3b → D2 → C1 → T3。**9段すべて完了した。**
 ### 中国語は諦めた（D-032）
 
 日本語学習で中国語CERが 11.5% → 77.2% に劣化する
-（[R-022](07-risks-and-decisions.md)）。原因は漢字の読みが日本語に上書きされること。
+（[R-022](risks-and-decisions.md)）。原因は漢字の読みが日本語に上書きされること。
 ユーザー判断（2026-09-12）で**日本語特化modelとする**。
 **英語は replay なしで保たれる**（WER 1.7%、baseと同値）ので影響しない。
 これにより D-009（replay 5〜10%）は不要になり、S2以降も100%日本語で進める。
@@ -290,7 +291,7 @@ artifacts/p0/2026-08-30T12-00-00/
 ### フェーズの完了宣言
 
 「スクリプトを実装した」ではなく「実行して成果物が揃った」で完了とします。
-[06-evaluation-plan.md](06-evaluation-plan.md) の原則どおり、実装済み・実行済み・品質合格を別に記録します。
+[RESULTS.md](RESULTS.md) の原則どおり、実装済み・実行済み・品質合格を別に記録します。
 
 ---
 
@@ -443,7 +444,7 @@ markup 4,543 / empty_text 1,055 / too_long 340 / name_placeholder 252。
 公式SentencePiece Tokenizer（16,384 piece、extended vocab 16,385、日本語は公式対応言語外）が
 日本語をどこまで表現できるかを実測し、frontend方針を確定する。
 
-選択肢は[02-continual-training-strategy.md](02-continual-training-strategy.md) 第4節の3分岐:
+選択肢は[risks-and-decisions.md](risks-and-decisions.md) 第4節の3分岐:
 既存Tokenizerを維持 / 既存token ID互換のvocabulary拡張 / reading・G2Pを入力へ追加。
 
 ### 状態: 完了（2026-08-30）
@@ -465,7 +466,7 @@ markup 4,543 / empty_text 1,055 / too_long 340 / name_placeholder 252。
 **`<unk>` が0なのは256個のbyte-fallbackピースが受けているため**で、日本語をよく
 表現できているからではない。小書き仮名15字種・漢字643字種・カタカナ18字種が
 単一ピースを持たない。→ 既存Tokenizerで開始可、**互換拡張の価値は高い**。
-詳細は [02章 §4](02-continual-training-strategy.md)。
+詳細は [リスクと意思決定](risks-and-decisions.md)。
 
 ### 作業
 
@@ -599,10 +600,10 @@ streaming decode経路（`vae.streaming_decode()`）でも同じ入力を通し�
 
 ### 成果物
 
-- `src/cutetts/training/manifest.py`（schema + validator。[04章](04-training-implementation.md) 第7節の構成に追加する）
+- `src/cutetts/training/manifest.py`（schema + validator。[training-implementation](training-implementation.md) 第7節の構成に追加する）
 - `src/cutetts/training/pairing.py`
 - `src/cutetts/training/text_normalize.py`（P1bでJ1（正規化テキスト）を選択した場合のみ。
-  [03章](03-data-and-frontend.md) 第4節の決定論的変換とrule ID記録を実装する）
+  [data-and-frontend](data-and-frontend.md) 第4節の決定論的変換とrule ID記録を実装する）
 - `scripts/prepare_japanese_manifest.py`
 - `tests/training/test_manifest.py`, `tests/training/test_pairing.py`
 
@@ -769,7 +770,7 @@ speaker slot と target の対応付けが壊れる。unpackedでは両者が一
 packingを書くまで露見しなかった。`target_batch_index`（行）と
 `target_sample_index`（sample）を分離して解決。
 
-#### 自分で決めた事項（04章「規定が無い箇所」への回答）
+#### 自分で決めた事項（[training-implementation](training-implementation.md)「規定が無い箇所」への回答）
 
 | 項目 | 決定 |
 |---|---|
@@ -825,7 +826,7 @@ VRAM実測の基準: P1eのVAE encode + Speaker Encoderで peak 2.48 GB。
 | speaker条件 | 同じ256-dim embeddingをLM側（`lm_speaker_linear`）とDiT側（adaLN-Zero）の両方へ渡す | `model.py`, `api.py` |
 | dtype | backbone/locencはcheckpoint dtype、`head` はfp32固定 | `model.py` |
 
-論文から取る式（[04章](04-training-implementation.md) 第2節）:
+論文から取る式（[training-implementation](training-implementation.md) 第2節）:
 `x_t = (1-t)ξ + tP`、target velocity `P - ξ`、`t = sigmoid(u), u ~ N(0,1)`、
 target patchを4つの独立noise/timeで複製。
 
@@ -891,7 +892,7 @@ flow lossとstop lossの重み、condition dropoutが落とす条件の範囲。
 ### 判断ゲート
 
 - R-001（公式training codeがない）: 上記の「自分で決めた項目」を文書に記録する
-- upstreamが学習コードを公開した場合、即置換せず[04章](04-training-implementation.md) 第9節の比較を行う
+- upstreamが学習コードを公開した場合、即置換せず[training-implementation](training-implementation.md) 第9節の比較を行う
 
 ---
 
@@ -903,14 +904,14 @@ flow lossとstop lossの重み、condition dropoutが落とす条件の範囲。
 
 ### 状態: 完了（2026-08-31、ゲート通過）
 
-**結果の全文は [S0-GATE.md](S0-GATE.md)。** in_domain CER 35.8% -> **28.4%**（-7.4pt）で
+**結果の全文は [RESULTS.md](RESULTS.md)。** in_domain CER 35.8% -> **28.4%**（-7.4pt）で
 主ゲートを満たした。7.15時間・3000step・9分（RTX 3090）。
 
-1回目の学習は `PairSampler.sample()` の誤用で無効（同じ4発話を3000step、[R-012](07-risks-and-decisions.md)）。
+1回目の学習は `PairSampler.sample()` の誤用で無効（同じ4発話を3000step、[R-012](risks-and-decisions.md)）。
 2回目が有効な結果。
 
 
-基準線の測定と固定は完了。**ゲート値は [S0-GATE.md](S0-GATE.md) に確定済みで、結果を見て変更しない。**
+基準線の測定と固定は完了。**ゲート値は [RESULTS.md](RESULTS.md) に確定済みで、結果を見て変更しない。**
 
 | subset | n | CER mean | median |
 |---|---:|---:|---:|
@@ -966,7 +967,7 @@ stop headが学習できず無限生成または早期停止、NaN/overflowの�
 
 ### 状態: 原因確定・修正済み（2026-09-02）
 
-**S1が失敗していた原因はデータではなく学習実装のバグだった（[R-020](07-risks-and-decisions.md)）。**
+**S1が失敗していた原因はデータではなく学習実装のバグだった（[R-020](risks-and-decisions.md)）。**
 公開checkpointの `qwen_backbone` / `locenc` は bf16 で、`AdamW` がそれを直接更新すると
 lr=2e-5 の更新量が bf16 の丸め幅を下回り、**3,000 step 回しても backbone は 3.68% しか
 動いていなかった**（`ParameterDrift` 実測。fp32 なら 100%）。
@@ -989,7 +990,7 @@ ASR床 10.4% に対し、TTS由来の誤りは **25.5pt → 11.4pt**（55%削減
 305時間で学習しても、S0（7.15時間）の 28.4% に届かない。
 S1系の最良は **30.8%**（密なクラスタ17.5時間）。
 
-原因は2つに絞れた（[R-018](07-risks-and-decisions.md) / [R-019](07-risks-and-decisions.md)）:
+原因は2つに絞れた（[R-018](risks-and-decisions.md) / [R-019](risks-and-decisions.md)）:
 
 1. **クラスタ密度**。S1は1クラスタ median 5発話で、`PairSampler` が
    組み合わせを作れない。密なクラスタに絞ると 36.8% → **30.8%**
@@ -1012,7 +1013,7 @@ step数・moe比率・話者あたりの学習量も棄却済み。詳細は [RE
 gol 5ゲーム（326時間・1,197話者ID・215 GB）を vast.ai 上で前処理した。
 215 GBはローカルへ落としていない。所要 約9時間・**$2.8**。
 
-前処理の過程で2つの静かな欠陥を見つけて修正した（[R-014](07-risks-and-decisions.md)、
+前処理の過程で2つの静かな欠陥を見つけて修正した（[R-014](risks-and-decisions.md)、
 分割tarの取りこぼし）。詳細は[RESULTS.md](RESULTS.md)。
 
 ### ゴール
@@ -1024,7 +1025,7 @@ gol 5ゲーム（326時間・1,197話者ID・215 GB）を vast.ai 上で前処�
 - [~] seen speakerとzero-shot speakerの差 — 測定はしたが
       **指標が鈍い**（zero-shot 12/12・差 +0.247 だが base 自身も 12/12 で通る）。
       本当に定量化するには話者数を増やした SIM-o / SIM-r が要る
-- [x] **英語・中国語のforgetting**（[R-022](07-risks-and-decisions.md)）—
+- [x] **英語・中国語のforgetting**（[R-022](risks-and-decisions.md)）—
       英語 WER 1.7% で無傷、**中国語 CER 11.5% → 77.2% で壊滅**。
       原因は忘却ではなく**漢字の読みが日本語に上書きされたこと**
 - [~] S2で使うconfig — **fp32 master weights は必須**（R-020）、
@@ -1060,7 +1061,7 @@ S1ではD-008の「読み誤りの内訳を集計する」だけを行い、対�
 
 ### 根拠（実測済み）
 
-誤読の主因は byte-fallback による文字の分解（[R-027](07-risks-and-decisions.md)）。
+誤読の主因は byte-fallback による文字の分解（[R-027](risks-and-decisions.md)）。
 
 | 語 | 分割 | byte-fallback |
 |---|---|---:|
@@ -1088,7 +1089,7 @@ S1ではD-008の「読み誤りの内訳を集計する」だけを行い、対�
 - [x] **専用の評価setで効果が測られている**
       （`data/eval/yomi_eval_set.json`、300文/300話者/114game、学習との重複0）。
       素CER **-2.64pt** [-4.07, -1.24]、読みCER **-4.23pt** [-5.44, -3.05]、
-      どちらも有意（[R-028 / R-029](07-risks-and-decisions.md)）
+      どちらも有意（[R-028 / R-029](risks-and-decisions.md)）
 - [x] **通常の会話文で悪化しない**（`eval_set_v3` in_domain 600文、同一GPUで対照）。
       素CER -0.60pt [-1.12, -0.10]、読みCER **-1.26pt** [-1.73, -0.80]、
       どちらも**有意に改善**。J2（+0.02pt、差なし）より良い
@@ -1114,7 +1115,7 @@ S1ではD-008の「読み誤りの内訳を集計する」だけを行い、対�
    アクセント情報も取れる、MIT、Windows wheel でビルド不要）。
    `pyproject.toml` の `[ja]` extra に置いた（upstream推論には不要なので core に入れない）。
    **`[onnxruntime]` extra は効果ゼロだったので入れない。**
-   詳細は [07章の選定節](07-risks-and-decisions.md#形態素解析器の選定d-0352026-09-13)
+   詳細は [[risks-and-decisions](risks-and-decisions.md)の選定節](risks-and-decisions.md#形態素解析器の選定d-0352026-09-13)
 2. **置換の対象をどう選ぶか**。候補:
    - byte-fallback を含む語だけ（R-027 と直結。機械的に決まる）
    - 辞書の読みが一意でない語だけ
@@ -1137,7 +1138,7 @@ S1ではD-008の「読み誤りの内訳を集計する」だけを行い、対�
 byte-fallback を減らす。gol 30万文で単独pieceを持たない文字は **1,115種**あり、
 `ゆ` `ぬ` のような常用ひらがなすら3 tokenに分解される。
 
-### 根拠と限界（[R-024](07-risks-and-decisions.md)）
+### 根拠と限界（[R-024](risks-and-decisions.md)）
 
 **実装は安価**。`lm_head` が無く入力embeddingだけを拡張すればよく、
 `PreTrainedTokenizer` の added-token 機構がそのまま効くので**推論コードを変えずに済む**。
@@ -1167,7 +1168,7 @@ byte-fallback を減らす。gol 30万文で単独pieceを持たない文字は 
 
 ## T1: 学習率の探索 — **完了。梃子ではなかった**
 
-### 結論（[R-035 / D-043](07-risks-and-decisions.md)）
+### 結論（[R-035 / D-043](risks-and-decisions.md)）
 
 **`lr=2e-5` は変える必要がない。** 4水準を同一条件で比較した
 （10,000 step / batch 4 / seed 42 / fp32。**全水準 `ParameterDrift` 1.0000**）。
@@ -1257,7 +1258,7 @@ T1 で lr は梃子でないと分かった（R-035）。学習19回すべてで
 T1 と同じ規模なら **約6時間 / $0.80**（vast.ai RTX 3090、評価3分割並列）。
 水準を増やすなら比例して伸びる。
 
-### 結果（2026-09-16、[R-036](07-risks-and-decisions.md) / D-044）
+### 結果（2026-09-16、[R-036](risks-and-decisions.md) / D-044）
 
 **batch size も学習対象も梃子ではなかった。**
 
@@ -1279,7 +1280,7 @@ T1 と同じ規模なら **約6時間 / $0.80**（vast.ai RTX 3090、評価3分�
 ---
 
 
-## F1: 評価を実運用と揃える（**次に着手**、GPU不要）
+## F1: 評価を実運用と揃える — **完了**
 
 ### 目的
 
@@ -1361,7 +1362,7 @@ vast.ai RTX 3090 で **約1.5時間 / 約$0.3**（66.4 GB のダウンロード�
 **別テイクは同じ台詞でも感情や文脈が違いうる**ので、出る値は
 **天井の下限**として読む。
 
-### 結果（2026-09-17、[R-037](07-risks-and-decisions.md) / D-045）
+### 結果（2026-09-17、[R-037](risks-and-decisions.md) / D-045）
 
 **天井は +0.38。現行モデルは隔たりの約32%しか埋めていない。**
 
@@ -1424,7 +1425,7 @@ latent は全量キャッシュ済みなので **前処理は要らない**（ma
 
 **実測: -3.82pt（有意）。上の行になった。**
 
-### 結果（2026-09-17、[R-038](07-risks-and-decisions.md) / D-046）
+### 結果（2026-09-17、[R-038](risks-and-decisions.md) / D-046）
 
 **データ量は読みCERの梃子だった。ただし抑揚は動かない。**
 
@@ -1452,7 +1453,7 @@ CER評価 約40分、抑揚評価 約10分。**約$0.6**（別に私の取り違
 
 ---
 
-## C1: 計算量を4倍にする（**提案**）
+## C1: 計算量を4倍にする — **完了。読みCER -1.40pt（有意）**
 
 ### 目的
 
@@ -1509,7 +1510,7 @@ step数の効きは 10,000→20,000 で -1.88pt、20,000→30,000 で -0.96pt �
 
 約2時間。**GPU不要**（保存済みの転写を読むだけ）。実測 約1.5時間。
 
-### 結果（2026-09-18、[R-040](07-risks-and-decisions.md)）
+### 結果（2026-09-18、[R-040](risks-and-decisions.md)）
 
 | run | 喋り続け | 自己反復 | 打切 |
 |---|---:|---:|---:|
@@ -1528,7 +1529,7 @@ step数の効きは 10,000→20,000 で -1.88pt、20,000→30,000 で -0.96pt �
 
 ---
 
-## M3: 抑揚に効く手段を設計する（**次**、まず設計）
+## M3: 抑揚に効く手段を設計する — **設計済み。仮説は M3b で否定された**
 
 ### 目的
 
@@ -1617,7 +1618,7 @@ flow matching の目標が「その文・その話者での平均的な韻律」
 
 ---
 
-## F2: frontend の音への効果（**提案**）
+## F2: frontend の音への効果 — **完了。数詞 -11.44pt（有意）**
 
 ### 目的
 
@@ -1645,7 +1646,7 @@ flow matching の目標が「その文・その話者での平均的な韻律」
 
 ---
 
-## D2: データ量の3点目（**提案**）
+## D2: データ量の3点目 — **完了。傾きは対数直線だった**
 
 ### 目的
 
@@ -1670,7 +1671,7 @@ step数では収穫逓減が見えている（10,000→20,000 で -1.88pt、20,0
 
 ---
 
-## T3: flow_copies / condition_dropout（**提案・優先度低**）
+## T3: flow_copies / condition_dropout — **完了。既定値のままが最良**
 
 ### 目的
 
@@ -1763,7 +1764,7 @@ J2（-11.80pt）と J3（-4.23pt）が再学習なしで効いたのは、
 | 動かない | テキストへの記号埋め込みでは足りない | **M4b / M4c（構造変更）へ**。M4a の安い側から潰した意味はある |
 | 読みCERが +1pt 以上悪化 | 表現の変更が副作用を持つ | (a) と (b) を比べて、仮名化と記号のどちらの影響かを分ける |
 
-### 結果（2026-09-18、[R-045](07-risks-and-decisions.md) / D-050）
+### 結果（2026-09-18、[R-045](risks-and-decisions.md) / D-050）
 
 **抑揚は動かなかった（+0.93pt、有意差なし。基準の +5pt 未達）。
 一方で読みCER が -5.80pt（13.38% → 7.58%）で、人間の床 5.59% まで 2.0pt。**
@@ -1808,7 +1809,7 @@ J2（-11.80pt）と J3（-4.23pt）が再学習なしで効いたのは、
 | **輪郭の相関** | `contour_similarity` | **-0.009** | 0.045 |
 | **アクセント核** | `observed_nucleus` | 固定回答 42.3% / 当てずっぽう 29.7% | — |
 
-### 実測（[RESULTS.md](RESULTS.md) / [R-032](07-risks-and-decisions.md)）
+### 実測（[RESULTS.md](RESULTS.md) / [R-032](risks-and-decisions.md)）
 
 | | base | **30,000 step** | 人間 |
 |---|---:|---:|---:|
@@ -1855,12 +1856,12 @@ M1 の時点では「別テイクが無いので天井が測れない」と書�
 **輪郭 +0.38 / アクセント 64.5%（句単位）**。
 
 **現行モデルは輪郭で隔たりの約32%しか埋めていない**（床 +0.015 → +0.122 → 天井 +0.38）。
-アクセントは辞書（43.2%）と同水準で、天井まで約19pt ある。→ [R-037](07-risks-and-decisions.md) / D-045
+アクセントは辞書（43.2%）と同水準で、天井まで約19pt ある。→ [R-037](risks-and-decisions.md) / D-045
 
 ---
 
 
-## M4a-split: -5.80pt を要因に分ける（**実行中**、2026-09-18）
+## M4a-split: -5.80pt を要因に分ける — **完了。効いていたのは全文片仮名化だけ**
 
 ### 動機
 
@@ -1952,7 +1953,7 @@ HF_TOKEN=<read権限> bash scripts/m4a_factor_split.sh
 実際に `m4a_accent_marks.sh` を実行中に更新して
 `line 79: y: command not found` で評価を落とした（学習は完了していた）。
 
-## M4c: 韻律を**構造で**受け取る（次の本命。2026-09-19 設計）
+## M4c: 韻律を**構造で**受け取る — **完了。輪郭は条件で動かせる**
 
 ### なぜこれが残ったか
 
@@ -2078,7 +2079,7 @@ F0 を取るには decode が要る。
 * **speaker embedding は触らない**（時間不変の条件は既に効いている）
 * **VAE は凍結のまま**（D-003）
 
-## M4b: テキストから韻律を予測する（M4c の次。2026-09-19 設計）
+## M4b: テキストから韻律を予測する — **完了。辞書は輪郭の形を持っていない**
 
 ### 位置づけ
 
@@ -2142,7 +2143,7 @@ F0 特徴量（`[有声フラグ, 正規化 log2 F0]` × patch）」を作るだ
 * **話者を混ぜてはいけない。** F0 は発話内の中央値で正規化してあるので
   話者に依存しないはずだが、話速と間の取り方は話者ごとに違う
 
-## M4 の残り: 目的とゴール（2026-09-20 設計）
+## M4 の残り（M4f / M4g / M4h）— **すべて完了**
 
 ### ここまでで分かっていること
 
@@ -2258,7 +2259,7 @@ F0 特徴量（`[有声フラグ, 正規化 log2 F0]` × patch）」を作るだ
 **M4g の事前基準は作り方が悪かった** — 「mismatch 比で有意に改善」は
 **mismatch が壊れるだけで通る**。以後は **oracle 対 none** で見る。
 
-## D3: **読みを閉じられるか**を $2 で決める（2026-09-21 完了）
+## D3: 読みを閉じられるか — **完了。閉じた**
 
 **目的**: S2（1,000時間）へ進むかを決める。S2 は前処理（P1e Pass B）だけで
 外挿 239 GPU時間・65.3 GB の重い仕事なので、**根拠を先に確かめる。**
@@ -2355,7 +2356,7 @@ F0 特徴量（`[有声フラグ, 正規化 log2 F0]` × patch）」を作るだ
 **先に正規化を作ってテストを書く。** 壊れた比較で 132% を出したので、
 **同じ失敗を繰り返さないこと。**
 
-## S2: 1,000時間（**取り下げ**）
+## S2: 1,000時間 — **取り下げ**
 
 ### 状態: **取り下げ**（2026-09-21。D3 / R-061 / D-055）
 
@@ -2418,133 +2419,40 @@ S2 の進退はその結果で決める。
 - D-009（replay混合）は**不要**になった（D-032 で中国語を諦めたため）。100%日本語で進める
 - P1e Pass B（全音声の前処理）が必要。実測外挿で **65.3 GB / 239 GPU時間**
 - voiceクラスタ閾値 t=0.92 の再較正（D-020。Pass B規模で未検証）
-- [R-026](07-risks-and-decisions.md) で実装した `ensure_minimum_duration` を
+- [R-026](risks-and-decisions.md) で実装した `ensure_minimum_duration` を
   残すか消すか（効果の裏づけが無い）
 
-## S3: 3,000〜10,000時間
+## 今後の段階（**いずれも未着手・前提が消えている**）
 
-### 目的
+**S2（1,000時間）を取り下げた時点で、規模を上げる段階は根拠を失った**
+（[R-061](risks-and-decisions.md)）。記録として残す。
 
-全データを使う最終日本語baseモデルを作る。
+| ID | 内容 | 状態 |
+|---|---|---|
+| S2 | 1,000時間 | **取り下げ**。CI の最も都合のよい端でも床に届かない |
+| S3 | 3,000〜10,000時間 | 前提が S2 と同じなので**取り下げ** |
+| S4 | Japanese Audio VAE | **見送り**。P1c で VAE は日本語でも十分と確認済み（[D-003](risks-and-decisions.md)） |
+| S5 | Guidance-step distillation | **未着手**。読みにも抑揚にも関係しないが、推論の速度には効く |
 
-### ゴール
-
-- [ ] accepted dataだけが段階的に投入され、speaker/domain/style exposureが監視されている
-- [ ] 固定テストで最良checkpointが選定されている
-- [ ] 日本語母語話者によるblind主観評価が完了している
-- [ ] model card、データ説明、制限事項、ライセンスが用意されている
-- [ ] 再現可能な推論手順が用意されている
-
-予算管理は「10,000時間を1 epoch」ではなく、packed token・audio seconds・optimizer steps・
-speaker exposureで行います。
-
----
-
-## S4: Japanese Audio VAE（条件付き）
-
-### 目的
-
-P1cまたはS1〜S3の失敗分析で **VAEがボトルネックと確認できた場合のみ**、
-24 kHz / 12.5 Hz / 64-dim の互換構造を保ったまま日本語音声分布へ適応する。
-
-### ゴール
-
-- [ ] 公式VAEがボトルネックであることの証拠が揃っている（実施の前提条件）
-- [ ] 日本語VAEが公式VAEを再構成品質で上回る
-- [ ] latent分布の変化に伴うTTS本体の再学習コストが見積もられている
-
-GAN discriminator・multi-resolution mel・WavLM teacherを含むため、TTS本体より重くなる可能性があります。
-既存TTS checkpointとの直接互換は期待しません。
-
----
-
-## S5: Guidance-step distillation
-
-### 目的
-
-日本語baseの品質確定後に、first-audio latencyとRTFを下げる。
-
-### ゴール
-
-- [ ] Diffusion Headのみを更新するdistillationが実装されている
-- [ ] 1/2/4 stepを同一checkpointで扱える
-- [ ] 同じ日本語評価setでbaseとの品質差が測定されている
-- [ ] 同一hardware・同一protocolでlatencyとRTFが比較されている
-- [ ] baseとdistillの両方が保持されている
-
----
-
-## 依存関係
-
-2026-08-30時点。P1aは完了（取り消し線）。
+## 依存関係（準備フェーズ）
 
 ```text
-             ┌── P1b ──────────────┐
-P0（weight）─┼── P1c ──────────────┤
-             └── P1e（Pass A）─ P1d ─ P2 ─┬─ S0 ─ S1 ─ S2 ─ S3 ─ S5
-                                          │       │
-        ~~P1a~~（完了）───────────────────┘       └── S4（条件付き）
-
-P1e（Pass B, gol全体）────────────────────────────── S2 以降で必要
+             ┌── P1b（Tokenizer）───┐
+P0（weight）─┼── P1c（VAE）─────────┤
+             └── P1e Pass A ─ P1d ──┴─ P2 ─ S0 ─ S1 ─ 以降の実験
 ```
 
-- **P0のweight取得が全体のボトルネック。** P1b（Tokenizer）はtokenizerディレクトリを、
-  P1c（VAE）はAudio VAE weightを、P1e（前処理）はVAEとSpeaker Encoderのweightを必要とする
-- P1bとP1cは互いに独立
-- P1dのvoiceクラスタリングはP1eのspeaker embeddingを消費する。順序はP1e → P1d
-- P1e Pass BはS2の直前までに完了していればよく、S0/S1と並行して流せる
-- S0はP1b・P1c・P2の3つが揃って初めて意味を持つ
+- **P0のweight取得が全体のボトルネック。** P1b は tokenizer ディレクトリを、
+  P1c は Audio VAE weight を、P1e は VAE と Speaker Encoder の weight を必要とする
+- P1b と P1c は互いに独立
+- P1d の voice クラスタリングは P1e の speaker embedding を消費する。順序は P1e → P1d
+- S0 は P1b・P1c・P2 の3つが揃って初めて意味を持つ
 
-## 決定ゲート一覧
-
-**2026-08-30 時点の表に、T2 後の決定（M2 / D1 / C1）を追記した。**
-確定済みの決定は [07章の D 表](07-risks-and-decisions.md)（D-001〜D-044）を見る。
-
-| 決定 | 状態 | 確定するフェーズ | 決めるのに必要な材料 |
-|---|---|---|---|
-| 使用するdataset（D-013） | **確定** | P1a | 実測済み |
-| データ利用条件（D-014） | **確定** | P1a | ユーザー確認 |
-| S0〜S3のdataset割り当て（D-017） | 提案 | P1a | 実測済み。S0開始時に再確認 |
-| 除外条件（D-016） | 提案 | P1d | 実測済み。validator実行で確定 |
-| split単位＝voiceクラスタ（D-015） | 提案 | P1d | クラスタリング結果 |
-| Tokenizer方針（維持/拡張/reading追加） | 未確定 | P1b | coverage report |
-| Audio VAEをfreezeで進めるか | 未確定 | P1c | reconstruction metric + 聴取 |
-| reference長の扱い（A/B/C） | 未確定 | P1d | 発話長分布（実測済み）と評価設計 |
-| stop target / loss weightの仕様 | 未確定 | P2 | 推論の停止挙動と一致するテスト |
-| Patch Encoder train / freeze | 未確定 | S0 | 小規模ablation |
-| full fine-tuning / 部分freeze / LoRA | 未確定 | S0 | VRAM実測と安定性 |
-| 日本語/replay比率 | 未確定 | S1 | forgetting測定 |
-| reading/G2P追加の要否 | 未確定 | S1 | 読み誤りの内訳 |
-| GPU規模（4090 1台 / H100 8台 等） | 未確定 | S0の実測後、S2着手前 | microbatch benchmark、throughput |
-| Japanese VAEの要否 | 未確定 | P1cで仮決定、S1〜S3で確定 | VAEがボトルネックである証拠 |
-| **モデル公開範囲**（R-009残件） | 未確定 | S3まで | 公開/内部利用の方針 |
-| **目標の言い直しの要否**（R-010） | 未確定 | S1まで | domain偏りの影響度 |
-| **抑揚に投資するか** | **確定: 投資する**（D-045） | ~~M2~~ 完了 | 天井 **+0.38**（現行 +0.122 は隔たりの約32%）。アクセントも天井 64.5% に対し現行 45.3% |
-| **S2（1,000時間）へ進むか** | 未確定 | **D1** | 30,000 step でのデータ量比較。**有意かつ2pt以上で進む** |
-| **最終モデルを長時間学習で作るか** | 未確定 | **C1** | 計算量4倍での3指標比較。1pt以上の有意改善で採用 |
-
-## 着手前に回答が必要な事項
-
-以下はコードでは決められず、この計画の規模そのものを変えます。2026-08-30時点。
-
-1. ~~**日本語データは現時点で手元にあるか。**~~ **解決。** gol-dataset（10,654 h）と
-   moe-speech-plus（621 h）を実測済み（D-013）。利用条件も解決済み（D-014）。
-2. **利用可能なGPUとストレージ。**（最優先の未回答）
-   S0の実施可否を直接決めるほか、P1eの前処理パスに次が必要:
-   - Pass A: 数百 GBの一時領域 + latent cache 数 GB
-   - Pass B: gol全体 7 TBのdownload帯域（音声は都度破棄するため常駐は不要）+ cache 61 GB
-   - GPU: VAE encoderとSpeaker Encoderを7.4M発話へ適用するGPU時間（Pass Aで実測する）
-3. **checkpointを公開するか、内部利用に限定するか。** MoeSpeech LICENSEはモデル公開を
-   明示的に許容している。S3のmodel card作成までに確定させる（R-009残件）。
-4. **日本語専用性能を最優先するか、既存5言語の能力を残すか。** replay data確保の要否が変わる。
-5. **日本語母語話者による主観評価の実施体制。** S1以降のexit gateに聴取評価が含まれる。
-6. **目標を「日本語TTS一般」から「日本語の表現的な多話者TTS」へ言い直すか。**
-   両datasetがanime / visual novel domainに偏っており、gol-datasetで数字を含む発話は
-   0.11%しかない（R-010）。中立朗読データを足すか、目標を実データに合わせるかの判断が要る。
+**P1e Pass B（gol 全体の前処理）は S2 の直前に回す予定だったが、
+S2 を取り下げたので不要になった。**
 
 ## 関連資料
 
-- [段階的な実験ロードマップ](05-experiment-roadmap.md)
-- [学習コード復元・実装計画](04-training-implementation.md)
-- [評価計画](06-evaluation-plan.md)
-- [リスク、意思決定、未解決事項](07-risks-and-decisions.md)
+- [実測値の一覧](RESULTS.md)
+- [リスク、意思決定、未解決事項](risks-and-decisions.md)
+- [学習実装](training-implementation.md)

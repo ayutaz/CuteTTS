@@ -168,7 +168,7 @@ target velocity = P - xi
 | condition dropout | 0.1（speaker + reference、joint） | |
 | 日本語/replay比率 | 100%日本語（replayなし） | **確定**。D-032で中国語を諦めたためreplayの目的が消えた（D-009は不要）。英語はreplayなしで保たれる（WER 1.7%） |
 
-### fp32 master weights が必須（[R-020](07-risks-and-decisions.md)。2026-09-02 確定）
+### fp32 master weights が必須（[R-020](risks-and-decisions.md)。2026-09-02 確定）
 
 **この節の旧版はS0時点で兆候を書いていた**（原文）:
 
@@ -328,7 +328,7 @@ tools/                 mutation_check（テストが実際に効くかの検証�
 
 **S0の1回目はこれらが無かったために、丸暗記を成功と読み違えた。**
 flow matching は原理的に velocity を完全には当てられないので、
-loss が 0 に近づくこと自体が異常のサインになる（[R-012](07-risks-and-decisions.md)）。
+loss が 0 に近づくこと自体が異常のサインになる（[R-012](risks-and-decisions.md)）。
 
 ## 9. 公式学習コードが公開された場合
 
@@ -352,6 +352,6 @@ fork側の実装を当面の正とします。
 
 ## 関連資料
 
-- [確認済みベースライン](01-verified-baseline.md)
-- [段階的な実験ロードマップ](05-experiment-roadmap.md)
+- [確認済みベースライン](architecture.md)
+- [実行の記録](execution-log.md)
 - [一次資料](references.md)

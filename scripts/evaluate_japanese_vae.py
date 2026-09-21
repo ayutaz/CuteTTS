@@ -14,8 +14,8 @@
 
 """P1c: 公式Audio VAE（24 kHz / 12.5 Hz / 64-dim）の日本語再構成評価。
 
-docs/japanese-training/08-execution-plan.md の P1c と
-docs/japanese-training/06-evaluation-plan.md 第2節を実装する。
+docs/japanese-training/execution-log.md の P1c と
+docs/japanese-training/RESULTS.md 第2節を実装する。
 
 TTS本体は読まない。AudioAcousticVAEAdapter の encode -> decode だけで完結し、
 「公式VAEをfreezeしたまま日本語へ進んでよいか / S4（Japanese VAE）を検討すべきか」を
@@ -1235,9 +1235,9 @@ def render_report(metrics: dict[str, Any], config: EvalConfig) -> str:
     add("## この評価に含まれていないもの")
     add("")
     add("- PESQ / STOI / UTMOS: 依存（pesq, pystoi, UTMOS）がこの環境に無いため未実装。")
-    add("- ASR CER: 日本語ASRを別途固定する必要がある（06章 第2節の指標のうち唯一の未実施）。")
+    add("- ASR CER: 日本語ASRを別途固定する必要がある（RESULTS 第2節の指標のうち唯一の未実施）。")
     add("- 人手聴取: 促音・撥音・長音・無声化の欠落、metallic/phase artifact、breath や語尾は")
-    add("  `samples/` のペアを日本語話者が聴いて確認すること（08章 P1c のゴール）。")
+    add("  `samples/` のペアを日本語話者が聴いて確認すること（execution-log P1c のゴール）。")
     add("- 収録条件の分散: 現時点の入力は moe-speech-plus（アニメ調・スタジオ収録）のみ。")
     add("  帯域制限・noise付きのsubsetや gol-dataset は含まれていない。")
     add("")

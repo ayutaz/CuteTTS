@@ -1,7 +1,7 @@
 # P1c: 公式Audio VAEの日本語再構成評価
 #
-# docs/japanese-training/08-execution-plan.md の P1c と
-# docs/japanese-training/06-evaluation-plan.md 第2節に対応する設定。
+# docs/japanese-training/execution-log.md の P1c と
+# docs/japanese-training/RESULTS.md 第2節に対応する設定。
 #
 #   .venv/Scripts/python.exe scripts/evaluate_japanese_vae.py \
 #     --config configs/japanese/vae-reconstruction.yaml
@@ -57,7 +57,7 @@ samples:
   # 促音・撥音・長音を含む発話を優先して残す（人手聴取のため）。
   prefer_phonetic_marks: true
 
-# 判定閾値。すべて「提案」であり、実測後に 07-risks-and-decisions.md の D-003 / R-003 へ反映する。
+# 判定閾値。すべて「提案」であり、実測後に risks-and-decisions.md の D-003 / R-003 へ反映する。
 thresholds:
   # 全体のmulti-resolution log-mel L1平均の上限
   mel_l1_max: 1.0

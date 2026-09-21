@@ -14,7 +14,7 @@
 
 """P0: 推論ベースライン再現スクリプト。
 
-``docs/japanese-training/08-execution-plan.md`` の **P0** を実行する。
+``docs/japanese-training/execution-log.md`` の **P0** を実行する。
 このforkと公開checkpointがこの環境で正しく動くことを確認し、以降のすべての比較の
 基準線（音声・速度・メモリ）を ``artifacts/p0/<timestamp>/`` に残す。
 
@@ -1145,7 +1145,7 @@ def render_report(payload: dict) -> str:
     lines.append("")
     lines.append(
         "`samples/` の音声は `artifacts/` 配下にあり、gitには入りません"
-        "（08-execution-plan.md の「artifactの公開制限」）。"
+        "（execution-log.md の「artifactの公開制限」）。"
     )
     return "\n".join(lines) + "\n"
 

@@ -17,7 +17,7 @@
 #   SHARDS     評価の並列数。既定 3
 #
 # **段は独立に再開できる。** 途中で落ちても ONLY で続きだけ回せる。
-# **GPUを使う処理は同時に走らせない**（学習時間が測れなくなる。08章の規約）。
+# **GPUを使う処理は同時に走らせない**（学習時間が測れなくなる。execution-logの規約）。
 set -euo pipefail
 
 WORKDIR="${WORKDIR:-/workspace/CuteTTS}"

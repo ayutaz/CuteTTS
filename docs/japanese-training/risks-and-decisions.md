@@ -8,11 +8,11 @@
 |---|---|---|---|
 | D-001 | 既存base checkpointから継続学習する | 決定済み | ユーザーの明示方針 |
 | D-002 | distill checkpointを最初の起点にしない | 提案採用 | base適応後にdistillする方が分析しやすい |
-| D-003 | 初期はAudio VAEをfreeze | **確定** | P1c実測で支持。CER差 +0.58pt、original/reconstruction間CERの中央値0.00%、speaker cos 0.939（[02章 §7](02-continual-training-strategy.md)） |
+| D-003 | 初期はAudio VAEをfreeze | **確定** | P1c実測で支持。CER差 +0.58pt、original/reconstruction間CERの中央値0.00%、speaker cos 0.939（[リスクと意思決定](risks-and-decisions.md)） |
 | D-004 | 初期はSpeaker Encoderをfreeze | 提案採用 | zero-shot SIMで再判定 |
 | D-005 | Patch Encoderをtrainする案を主案にする | **確定** | VRAM実測でfreezeの節約は0.2GB（5%）・速度差ほぼゼロ。freezeする理由がない |
 | D-006 | 最初はfull fine-tuning | **確定** | 30秒発話でも peak 4.15 GB。24GBに余裕、16GBでも載る（[RESULTS.md](RESULTS.md)） |
-| D-007 | 既存Tokenizerを先に測る | **完了** | P1b実測済み。`<unk>` 0%だがbyte-fallbackがtokenの9.66%・文の45.6%（[02章 §4](02-continual-training-strategy.md)） |
+| D-007 | 既存Tokenizerを先に測る | **完了** | P1b実測済み。`<unk>` 0%だがbyte-fallbackがtokenの9.66%・文の45.6%（[リスクと意思決定](risks-and-decisions.md)） |
 | D-008 | Raw textから開始し、reading/accentを段階追加 | **reading実装・検証済み**（2026-09-03） | 読み誤りの内訳を集計した（[RESULTS.md](RESULTS.md)）。out_of_domain の誤りは **複合漢数字が支配的**（評価12/12が該当、学習コーパスには0.32%＝752例しかなく、しかも `二千二十一貫` 等の特殊用例）。`十五分`→`15分`、`四トン`→`4トン` のような単純な数は既に読めるので、欠けているのは**桁の合成規則**。母集団に用例が無いためデータ量では解決しない。**tokenizerの前で漢数字を読みへ展開する frontend（J2）を入れる。** **2026-09-03 実装・検証済み**: 専用評価set200文で **-11.80pt**（95%CI [-17.45,-6.00]、有意）。通常の会話文600文では +0.02pt で副作用なし（598/600がCER完全一致）。**再学習を要しない。**`src/cutetts/training/reading.py` / `scripts/synthesize_japanese.py`。 固有名詞・稀読み（`藤宮高邦` `会釈`）も同じ frontend で扱う |
 | D-009 | 日本語90〜95% + replay 5〜10% | **不要**（2026-09-02） | D-032 で中国語を諦めたため replay の目的が消えた。S2 は100%日本語で進める。**英語は replay なしでも保たれる**（WER 1.7%、base と同値）ので影響しない |
 | D-010 | Japanese VAEは条件付き | **当面見送り** | P1cで公式VAEがボトルネックである証拠は得られなかった。S4は着手しない |
@@ -24,7 +24,7 @@
 | D-016 | 総称ラベル話者・記号のみ発話・markup発話を学習から除外する | 提案 | 実測で対象を特定済み（[データ棚卸し](data-inventory.md) 第6節）。P1dのvalidatorで実装 |
 | D-017 | S0は moe-speech-plus、S1以降は gol-dataset を主軸にする | 提案 | moe側は話者あたり最小14.3分を保証しspeechMOSを持つ。gol側は規模を持つ |
 | D-018 | 既存Tokenizerを維持したままStage 0を開始する | **維持を継続**（2026-09-10） | P1c実測で情報欠落なし。**分岐2（互換拡張）を調査した結果、実装は安価だが期待した経路では効かない**（[R-024](#r-024-tokenizer拡張は安価だが期待した経路では効かない)）。系列は33%短くなるがCER改善は未保証で、`▁` のずれという副作用もある。lr探索を先に行う |
-| D-019 | 日本語ASRは `kotoba-tech/kotoba-whisper-v2.0` に固定する | 提案採用 | P1cのCER測定で使用。06章が要求する「ASRのversion固定」に対応 |
+| D-019 | 日本語ASRは `kotoba-tech/kotoba-whisper-v2.0` に固定する | 提案採用 | P1cのCER測定で使用。[RESULTS](RESULTS.md)が要求する「ASRのversion固定」に対応 |
 | D-020 | voiceクラスタリングの閾値は **0.92** | 提案 | P1dで較正。既定0.70は77話者中62を1クラスタへ併合し破綻した。Pass B規模で再較正が必要 |
 | D-021 | leakage防止では **過剰併合を安全側** とする | 提案採用 | 併合しすぎても学習話者が減るだけだが、併合し損ねるとzero-shot splitに同じ声が漏れる |
 | D-022 | Windowsでは `triton-windows` を導入する | 決定済み | 未導入だとdistillが `torch.compile` 失敗で全滅する（P0で実証） |
@@ -170,7 +170,7 @@
 **16GBのローカルGPUでも十分載る。** VRAMはボトルネックではなかった。
 残る制約はスループット（150 ms/step）とデータ量。
 
-| 項目 | 05章の想定 | 実機 |
+| 項目 | [execution-log](execution-log.md)の想定 | 実機 |
 |---|---|---|
 | 開発PoC GPU | RTX 4090 24 GB | **RTX 4070 Ti SUPER 16 GB** |
 | ストレージ空き | 未記載 | C: 3.2 TB / D: 1.5 TB |
@@ -236,7 +236,7 @@ gol-dataset全体（7 TB）のダウンロードは容量的には可能です�
 - 話者多様性と表現力では有利（実効話者数 約2,000〜3,500）
 - **数字・日付・単位・英数字混在の音声がほぼ無い。**
   gol-datasetでASCII数字を含む発話は0.11%、ラテン文字は1.41%
-- [06章](06-evaluation-plan.md) 第3節の `text-challenge` が、学習分布の外になる
+- [RESULTS](RESULTS.md) 第3節の `text-challenge` が、学習分布の外になる
 - 生成音声が全体としてキャラクター演技寄りになる
 
 対策:
@@ -322,7 +322,7 @@ zero-shot voice cloning の評価は、この人数では統計的に意味を�
 
 - データ量を増やしてクラスタ総数を増やす → S1前処理で **265.7時間 / 894 cluster**
 - zero-shot split に回すクラスタ数の下限を明示する →
-  [06章](06-evaluation-plan.md)に「zero-shot 20 voice cluster以上」を追加
+  [RESULTS](RESULTS.md)に「zero-shot 20 voice cluster以上」を追加
 
 **S1の実績:**
 
@@ -794,7 +794,7 @@ CI の下端 -1.41pt / 1.26 decade = **-1.12pt/10倍**。ここから
 `--f0-dropout 0.1` / 条件づけは線形・`--f0-lr 2e-4`（M4g の結果により運用点のまま）。
 `ParameterDrift` は backbone / locenc / head / 条件づけ すべて **100%**（R-020）。
 
-#### 事前に決めた3つの基準（結果を見る前に 08章へ書いた）
+#### 事前に決めた3つの基準（結果を見る前に [execution-log](execution-log.md)へ書いた）
 
 | 指標 | 基準 | 実測 | 判定 |
 |---|---|---|---|
@@ -1665,8 +1665,8 @@ M2 と同じ壁で、**辞書の水準（人間 対 辞書 44.8%）を超える�
 | 要因 | 分離する対照 | 状態 |
 |---|---|---|
 | 学習と推論の frontend を揃えた | 基準線 → `m4a-kana` | **-1.74pt**（測定済み） |
-| 全文を片仮名にした | `kana_full`（記号なし） | **未実施** |
-| 核の位置の情報 | `accent_shuffled`（核を偽の位置へ） | **実行中** |
+| 全文を片仮名にした | `kana_full`（記号なし） | **-4.40pt**（測定済み。**最大の要因**） |
+| 核の位置の情報 | `accent_shuffled`（核を偽の位置へ） | **-0.18pt**（測定済み。効果なし） |
 
 `accent_shuffled` は**記号の数と句の構造を保ったまま核の位置だけを
 偽の位置へ動かす**。読みCERが 7.58% 付近のままなら効いていたのは
@@ -2582,7 +2582,7 @@ frontend で読みを与えれば直る種類の問題で、**再学習を要し
 `ちゅうか` にも `ゅ` の fallback が3つ残る。J3 と R-024 は併せて効く。
 
 **対策（D-034）**: J3（読み付与 frontend）を実装する。詳細は
-[08章](08-execution-plan.md)。
+[execution-log](execution-log.md)。
 
 ### R-025: 学習率を一度も探索していない → **T1で探索し、梃子でないと判明**
 

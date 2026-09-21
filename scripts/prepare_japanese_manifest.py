@@ -21,7 +21,7 @@
 * ``data/manifests/all.jsonl``  … 上記の結合（splitを付与済み）
 
 あわせて ``metadata.tsv`` 全7,405,094行に対して除外条件だけを適用し、
-**raw hours と accepted hours** を集計する（08章 P1a のゴール）。
+**raw hours と accepted hours** を集計する（execution-log P1a のゴール）。
 これはmanifestを作らずストリーミングで数えるため、tarが手元に無くても実行できる。
 
 sample_rate は game / 話者ごとに実ファイルから読む。gol-datasetは44.1 kHzと48 kHzが

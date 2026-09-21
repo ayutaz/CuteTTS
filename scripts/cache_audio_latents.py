@@ -15,7 +15,7 @@
 """P1e: 前処理パス。全音声を1回だけ読み、latent と speaker embedding を同時に作る。
 
 P1dのvoiceクラスタリングとP2のlatent cacheはどちらも全音声を1回読む必要があるため、
-別々に実施すると同じI/Oを2回払う。この1パスで両方を生成する（08章 P1e）。
+別々に実施すると同じI/Oを2回払う。この1パスで両方を生成する（execution-log P1e）。
 
 * Audio VAE は 24 kHz 入力 → ``[T, 64]`` latent
 * Speaker Encoder は 16 kHz 入力 → ``[256]`` embedding

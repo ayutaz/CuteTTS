@@ -34,7 +34,7 @@
   推論側は patch 生成の *前* に判定し、生成後に break する
   （`inference/generation.py` の `_stop_after_current_patch` と `break`）。
 
-論文にもコードにも規定が無く、このforkで決めた事項（04章「自分で決める必要がある箇所」）:
+論文にもコードにも規定が無く、このforkで決めた事項（training-implementation「自分で決める必要がある箇所」）:
 
 * padding patch は loss の分子からも **分母からも** 除く（`loss_mask`）。
 * stop の class imbalance は `positive_weight` で対処する。

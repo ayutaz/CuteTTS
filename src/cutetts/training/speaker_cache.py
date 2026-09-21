@@ -14,7 +14,7 @@
 
 """Speaker embedding cache（P1e）。
 
-08-execution-plan.md P1e のとおり、latent cache と **同じ1パス** で
+execution-log.md P1e のとおり、latent cache と **同じ1パス** で
 Speaker Encoder（ECAPA student、16 kHz 入力 / 256次元）の embedding も書き出す。
 発話あたり 256 dim x fp32 = 1 KB なので gol全体（7,405,094 発話）でも約 7.4 GB。
 

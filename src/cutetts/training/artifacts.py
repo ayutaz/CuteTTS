@@ -14,7 +14,7 @@
 
 """Run artifact layout shared by every Japanese continual-training phase.
 
-`docs/japanese-training/08-execution-plan.md` の「共通ルール / artifactの保存」を実装する。
+`docs/japanese-training/execution-log.md` の「共通ルール / artifactの保存」を実装する。
 1 runにつき ``artifacts/<phase>/<YYYY-MM-DDTHH-MM-SS>/`` を作り、その中へ
 
 * ``run.json``     … phase / 実行コマンド / seed / 開始時刻 / 任意のextra

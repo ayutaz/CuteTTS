@@ -4,10 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## このリポジトリの位置づけ
 
-`OPPO-Mente-Lab/CuteTTS` のfork（`origin`: `https://github.com/ayutaz/CuteTTS.git`）。
+**CuteTTS-jp**。`OPPO-Mente-Lab/CuteTTS` のfork。
 upstreamのコードは **推論専用** であり、学習コード（trainer / dataset / loss / packing）は一切含まれない。
 
-このforkの目的は `docs/japanese-training/` にある通り、公開base checkpoint `OPPOer/CuteTTS` からの
+CuteTTS-jp の目的は `docs/japanese-training/` にある通り、公開base checkpoint `OPPOer/CuteTTS` からの
 **日本語継続学習** を段階的に進めること。作業ブランチは `feat/japanese-training`。
 
 `src/cutetts/` 配下はupstream由来のinference実装で、`modeling/model.py` と `modeling/processor.py` は
@@ -64,7 +64,7 @@ uv run --no-sync python scripts/<name>.py --config configs/japanese/<name>.yaml
 `uv run --no-sync python -c "import sys; print(sys.executable)"` で
 `.venv/Scripts/python.exe` を指していることを確認できる。
 
-GPUは RTX 4070 Ti SUPER 16 GB（05章が想定した4090 24GBより小さい。R-007参照）。
+GPUは RTX 4070 Ti SUPER 16 GB（[execution-log](docs/japanese-training/execution-log.md) が想定した4090 24GBより小さい。R-007参照）。
 
 ### テスト
 
@@ -73,7 +73,7 @@ GPUは RTX 4070 Ti SUPER 16 GB（05章が想定した4090 24GBより小さい。
 `tests/training/` はgit管理される。lint設定は引き続き未整備。
 
 `model/`、`artifacts/`、`data/` はgitignore。**`artifacts/` 配下の音声は学習データの
-ライセンス上、公開・コミットしてはならない**（08章「artifactの公開制限」）。
+ライセンス上、公開・コミットしてはならない**（[execution-log](docs/japanese-training/execution-log.md) の「artifactの公開制限」）。
 
 ## アーキテクチャ
 
@@ -138,12 +138,12 @@ LMのtoken rateは `12.5 / 2 = 6.25 patch/s`。`--max-decode-length 750` は約1
 ## 日本語継続学習プロジェクト（docs/japanese-training/）
 
 **まず読むべきは [`docs/japanese-training/RESULTS.md`](docs/japanese-training/RESULTS.md)**（P0/P1の実測値一覧）と
-[`08-execution-plan.md`](docs/japanese-training/08-execution-plan.md)（フェーズ定義とゴール）。
+[`execution-log.md`](docs/japanese-training/execution-log.md)（フェーズ定義とゴール）。
 背景は README → 01〜07、データは data-inventory.md。
 
 文書は情報を **確認済み / 決定済み / 提案 / 未確定** の4状態で区別する規約がある。
 「実装した」と「日本語学習が成功した」を混同しないこと。
-07章の意思決定表（D-001〜D-044）は項目を削除せず、状態と理由を追記して更新する。
+[risks-and-decisions](docs/japanese-training/risks-and-decisions.md) の意思決定表（D-001〜D-055）は項目を削除せず、状態と理由を追記して更新する。
 
 ### 進捗（2026-09-20）
 
@@ -486,7 +486,7 @@ M2 で天井を測った結果、**輪郭は隔たりの68%が未達**で、
 | ~~M1~~ | 抑揚・アクセントの測定 | **完了**（240文/53話者）。学習で輪郭の相関 +0.024→**+0.122**、アクセント対人間 35.2%→**43.6%**（どちらも有意）。base は床と区別できない＝**抑揚は学習が与えている** | 完了 |
 | ~~T1~~ | 学習率の探索 | **完了。梃子ではなかった**（R-035 / D-043）。半分と5倍は読みCERが有意に悪く（+2.06 / +3.00pt）、2.5倍は区別できない。抑揚・アクセントはどの水準も有意差なし | 完了 |
 | ~~T2~~ | batch size / 学習対象 | **完了。梃子ではなかった**（R-036 / D-044）。batch16 は同step なら -1.91pt だが同sample なら +1.67pt で、**効いているのは計算量**。head凍結は +0.78pt で悪化 | 完了 |
-| ~~F1~~ | 評価を実運用と揃える | **完了**。実運用の主値は **読みCER 12.36%**（比較用 13.38%） | 完了 |
+| ~~F1~~ | 評価を実運用と揃える | **完了**。当時の主値は 12.36%（**現在は `--frontend accent` の 7.58%**） | 完了 |
 | ~~F3~~ | 新最良を frontend 込みで測る | M4a-split が上書きした（7.58%） | 完了 |
 | ~~M4c~~ | 韻律を構造で受け取る | **完了**（R-054 / D-052）。**輪郭は +0.118 制御できる**（DiT head の adaLN + 先読み4 patch）。**差し込む場所が効き、量は効かない**。**アクセント核は真の F0 を与えても動かない**。**既定にしない**（実運用で与えるものが無く、条件が外れると素より悪い）。**韻律転写の機能としては成立** | 完了 |
 | ~~M4b~~ | テキストから韻律を予測 | **完了**（R-053）。**辞書は輪郭の形を一切持っていない**（相関 -0.001。床は +0.006）。アクセント核は45%当てるのに連続的な動きは持たない。学習した予測器も **+0.113** で、M4c の利得と掛けると検出限界に埋もれる | 完了 |

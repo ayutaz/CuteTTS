@@ -3,11 +3,11 @@ name: cutetts-ja-pipeline
 description: Use when running, resuming, or debugging any CuteTTS Japanese continual-training phase in this repository (P0 baseline, P1b tokenizer, P1c VAE, P1d manifest, P1e latent cache, S0/S1 training, CER evaluation with the v3 600-sentence set, forgetting, streaming, listening kits, numeral reading J2, the completed J3 reading assignment, M1 prosody and accent measurement, the completed T1 learning-rate sweep and T2 batch-size/trainable-module sweep, the completed F1 frontend alignment and M2 prosody-ceiling measurement, plus the planned D1 / C1 phases) — covers setup, the venv, GPU rules, running jobs on vast.ai, publishing preprocessed data to Hugging Face, exact commands with their inputs and outputs, the fp32 master-weight requirement that made training work at all, and the measurement defects and silent failures that repeatedly produced wrong conclusions.
 ---
 
-# CuteTTS 日本語学習パイプラインの実行
+# CuteTTS-jp 学習パイプラインの実行
 
 P0/P1/S0/S1 スクリプトを実際に完走させるためのリファレンス。
 実測値は [`docs/japanese-training/RESULTS.md`](../../../docs/japanese-training/RESULTS.md)、
-フェーズ定義は `docs/japanese-training/08-execution-plan.md`。
+フェーズ定義は `docs/japanese-training/execution-log.md`。
 
 ## 学習と評価で必ず守ること（これを外すと結論が壊れる）
 
@@ -127,19 +127,20 @@ conditioner の metadata から取るので、2箇所に書くと学習・評価
 | `c1-batch16-30k/inference/` | 11.98% | — | なし | 計算量4倍（R-043） |
 | `s1v2-fp32-30000/` | 13.38% | — | なし | 3指標の基準線（M1 / M2 / T1 / T2 / D1 / D2） |
 
-| 指標 | base | **現行** | 人間 |
+| 指標 | base | **現行**（`m4a-accent`） | 人間 / 上限 |
 |---|---:|---:|---:|
-| 素CER（v3 600文） | 35.86% | **20.10%** | 10.42% |
-| 読みCER（frontend無し） | 30.94% | **13.38%** | 5.59% |
-| **読みCER（J2+J3込み＝実運用）** | — | **12.36%** | 5.59% |
-| 輪郭の相関（240文） | +0.024 | **+0.122** | 床 -0.009 / **天井 +0.38** |
-| アクセント核（対人間） | 35.2% | **43.6%** | 辞書が44.8% / **天井 64.5%** |
+| 素CER（v3 600文） | 35.86% | **16.39%** | 10.42% |
+| **読みCER（`--frontend accent`）** | — | **7.58%** | 床 **5.59%** |
+| 読みCER（frontend無し・比較用） | 30.94% | 13.38% | 5.59% |
+| 輪郭の相関（240文） | +0.024 | **+0.091** | **上限 +0.367**（codec） |
+| アクセント核（対人間） | 35.2% | **43.6%** | 辞書 44.8% / **上限 75.0%** |
 
 盲検A/Bで 15/18（83%、p=0.0038）と知覚できる差がある。
 **3指標すべてで学習が有意に効いているが、どれも人間に届いていない。**
 
-**評価は既定で frontend を適用しない。** 実運用の値が要るときは
-`evaluate_japanese_cer.py --expand-numerals --assign-yomi` を付ける。
+**評価は既定で frontend を適用しない。** 現行最良の値が要るときは
+`evaluate_japanese_cer.py --frontend accent` を付ける。
+**frontend 込みの値と frontend 無しの値を混同しない。**
 **checkpoint どうしの比較では付けずに揃える**（過去の値と比較するため）。
 
 **frontend は `yomi.apply_frontend` 経由で掛ける（J3 → J2 の順）。**
@@ -412,7 +413,8 @@ yes | vastai destroy instance <id>
 
 **`git archive` は `core.autocrlf=true` だと CRLF に変換する。**
 shellスクリプトを送ると `set: pipefail: invalid option name` で落ちる
-（bash が `pipefail` を読む）。**`git -c core.autocrlf=false archive` を使う。**
+（bash が `pipefail
+` を読む）。**`git -c core.autocrlf=false archive` を使う。**
 Pythonは CRLF でも動くので、**shellスクリプトだけが静かに壊れる。**
 
 **リモート実行で必ず守ること**

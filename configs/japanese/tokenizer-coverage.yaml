@@ -1,7 +1,7 @@
 # P1b: 日本語Tokenizer coverage 測定の設定
 #
-# docs/japanese-training/08-execution-plan.md の P1b と
-# docs/japanese-training/02-continual-training-strategy.md 第4節 (T0) に対応する。
+# docs/japanese-training/execution-log.md の P1b と
+# docs/japanese-training/risks-and-decisions.md 第4節 (T0) に対応する。
 #
 # 実行:
 #   .venv/Scripts/python.exe scripts/analyze_japanese_tokenizer.py \

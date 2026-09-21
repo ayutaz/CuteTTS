@@ -15,7 +15,7 @@
 """固定評価setで日本語CERを測る。S0のゲート判定に使う。
 
 同じ評価set・同じASR・同じ推論設定で checkpoint を比較する
-（06章「同じtext、reference、seed、推論設定でcheckpointを比較する」）。
+（RESULTS「同じtext、reference、seed、推論設定でcheckpointを比較する」）。
 
 ASR は `kotoba-tech/kotoba-whisper-v2.0` に固定（D-019）。
 subset ごと（in_domain / out_of_domain / phonetic）に分けて集計する。

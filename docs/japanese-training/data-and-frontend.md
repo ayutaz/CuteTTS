@@ -23,7 +23,7 @@ manifest と前処理は実装済みで、S0 まで動いています。
 ないが、仮名ならモデルが既に読める。`src/cutetts/training/reading.py`。
 
 **J3（語の読み付与）は実装済み**（2026-09-13、`src/cutetts/training/yomi.py`）。誤読は聴取4回すべてで最多の指摘（45%）で、
-主因は byte-fallback による文字の分解（[R-027](07-risks-and-decisions.md)）。
+主因は byte-fallback による文字の分解（[R-027](risks-and-decisions.md)）。
 `華` は単独pieceを持たず3つのバイト断片になる。仮名に置き換えると
 `中華`→`ちゅうか`、`湊`→`みなと` が直る。形態素解析器は **`pyopenjtalk-plus`**
 （4候補の実測比較で選定。D-035）。
@@ -247,6 +247,6 @@ replay dataには次が必要です。
 
 ## 関連資料
 
-- [日本語継続学習の方針](02-continual-training-strategy.md)
-- [段階的な実験ロードマップ](05-experiment-roadmap.md)
-- [評価計画](06-evaluation-plan.md)
+- [リスクと意思決定](risks-and-decisions.md)
+- [実行の記録](execution-log.md)
+- [実測値の一覧](RESULTS.md)

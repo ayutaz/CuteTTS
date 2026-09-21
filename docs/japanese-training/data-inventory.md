@@ -2,7 +2,7 @@
 
 最終更新: 2026-09-13
 
-[08-execution-plan.md](08-execution-plan.md) のP1aの成果物。
+[execution-log.md](execution-log.md) のP1aの成果物。
 Hugging Face APIとファイル実体から確認できた事実と、まだ確定していない項目を分けて記載します。
 
 調査時点でHFに `ayousanz` として認証済み、`midralab` org のメンバー。両datasetとも
@@ -172,7 +172,7 @@ markupの内訳（上位）: `</r>` 2,547、`<ハ>` 2,211、`[n]` 332、`</d>` 2
 |---|---|---|
 | 同名異キャラの衝突 | game横断IDの61.3%について、同一キャラか別キャラかを検証していない | speaker条件付けとzero-shot splitの正当性 |
 | 品質指標 | MOS・SNR等のスコアが付随しない | S0で「少数の高品質話者」を選ぶ根拠が無い。moe-speech-plusのspeechMOSと対照的 |
-| 収録・分離品質 | BGM/SE混入、複数話者、クロストークの有無が未評価 | [03章](03-data-and-frontend.md) 第3節の確認項目 |
+| 収録・分離品質 | BGM/SE混入、複数話者、クロストークの有無が未評価 | [data-and-frontend](data-and-frontend.md) 第3節の確認項目 |
 | ~~tar 6件の扱い~~ | **解決（2026-09-01）**。大きいgameが `_part1` / `_part2` に分割されているため。602 - 596 = 6 は分割の余り | 下記「tarの分割」参照 |
 
 ### tarの分割（2026-09-01 確認）
@@ -224,7 +224,7 @@ S1のゴールから外す根拠になった（D-026）。
 
 話者IDは `SHA-256(表示名)[:32]` であり、**辞書攻撃で一般的な名前は復元できます**
 （本調査でも総称ラベル91件を復元した）。IDそのものが匿名化として機能しない前提で、
-公開物における識別名の扱いを決める必要があります（[07章](07-risks-and-decisions.md) R-009）。
+公開物における識別名の扱いを決める必要があります（[risks-and-decisions](risks-and-decisions.md) R-009）。
 
 ---
 
@@ -343,9 +343,9 @@ anime-whisperとparakeetの2系統があるため、**両者の不一致をtrans
 | moe-speech-plus | `uuid.uuid4().hex[:8]`（ランダム） | READMEに「同一声優・同一キャラでも別IDを割り当てる」と明記 |
 
 **どちらも speaker-disjoint split が voice-actor-disjoint を保証しません。**
-[03章](03-data-and-frontend.md) 第7節と[06章](06-evaluation-plan.md) 第4節が前提にする
+[data-and-frontend](data-and-frontend.md) 第7節と[RESULTS](RESULTS.md) 第4節が前提にする
 zero-shot評価は、このままでは**楽観側にバイアスします**（学習済みの声が
-別IDでzero-shot splitに現れる）。[07章](07-risks-and-decisions.md) R-004の具体化です。
+別IDでzero-shot splitに現れる）。[risks-and-decisions](risks-and-decisions.md) R-004の具体化です。
 
 #### 対策（提案・P1dで実施）
 
@@ -368,7 +368,7 @@ zero-shot評価は、このままでは**楽観側にバイアスします**（�
 
 ### 1. 規模の制約が外れ、律速がlicenseと前処理へ移った
 
-[05-experiment-roadmap.md](05-experiment-roadmap.md) のS3が想定する3,000〜10,000時間を、
+[execution-log.md](execution-log.md) のS3が想定する3,000〜10,000時間を、
 gol-dataset単独で満たせます。当初「10,000時間をどう集めるか」だった課題は、
 **「10,654時間をどう捌くか」と「使ってよいか」** に置き換わりました。
 
@@ -385,7 +385,7 @@ VAEをfreezeする前提なら、7 TBの音声を毎step読む必要はありま
 | speaker embedding（256 dim fp32、発話あたり1 kB） | — | 7.4 GB |
 
 **全データのlatent cacheが約61 GB**に収まります。一度cacheを作れば、学習時に7 TBは不要です。
-[04章](04-training-implementation.md) 第6節のlatent cache方針を、この規模が強く裏づけます。
+[training-implementation](training-implementation.md) 第6節のlatent cache方針を、この規模が強く裏づけます。
 
 ただし cache生成は全音声を1回ずつVAEへ通す必要があり、7 TBのI/Oとencodeコストが発生します。
 実測はP2 Task 1で行い、tar単位で「取得 → 24 kHz変換 → encode → cache書き出し → 音声破棄」の
@@ -403,7 +403,7 @@ VAE用に**先頭30秒**を想定しています。1発話をそのままreferen
 - B: reference長を実データ分布（約5秒）に合わせ、推論側の既定値も見直す
 - C: reference長をランダム化し、推論時の長さ変動に頑健にする
 
-[06章](06-evaluation-plan.md) 第4節が「reference duration別の性能」を評価軸に挙げているため、
+[RESULTS](RESULTS.md) 第4節が「reference duration別の性能」を評価軸に挙げているため、
 ここは評価と対で設計します。
 
 ### 4. domainが偏っている（ロードマップの前提修正）
@@ -413,14 +413,14 @@ VAE用に**先頭30秒**を想定しています。1発話をそのままreferen
 - 感情表現が豊かで話者数が非常に多い（19,349話者）。multi-speaker・表現力の面では有利
 - 一方で**中立的な朗読・ニュース・実用文の音声がほぼ無い**。できあがるモデルは
   その方向に寄る
-- テキストが会話文中心。[03章](03-data-and-frontend.md) 第4節が挙げる数字・日付・単位・
+- テキストが会話文中心。[data-and-frontend](data-and-frontend.md) 第4節が挙げる数字・日付・単位・
   URL・型番の出現が乏しい可能性が高い。P1bのcoverage corpusと、
   `text-challenge` splitは**学習データ分布の外**になる
 - `…………` のようなテキストを持つ発話（sample中に実在）や、0-1秒が4.39%ある。
   非音声・極端に短い発話のフィルタが必要
 
 実測でも裏づけられました。gol-datasetのテキストで **ASCII数字を含む発話は0.11%、
-ラテン文字は1.41%** しかありません。[06章](06-evaluation-plan.md) 第3節が要求する
+ラテン文字は1.41%** しかありません。[RESULTS](RESULTS.md) 第3節が要求する
 「数字、日付、時刻、単位、通貨、英数字混在」のchallenge textは、
 **ほぼ完全に学習データ分布の外**になります。
 
@@ -573,11 +573,11 @@ t=0.92で77話者→71クラスタ、**11話者が5クラスタへ統合**され
 4. ~~moe-speech-plusの総時間数・話者数を実測する~~ 完了。473話者 / 621.4 h
 5. **Speaker Encoderによるvoiceクラスタリング**を実施し、split単位をIDからvoiceクラスタへ
    移す（P1d。上記「影響 0」の対策）
-6. checkpointの公開/内部利用の方針を仮決定する（[07章](07-risks-and-decisions.md) R-009）
+6. checkpointの公開/内部利用の方針を仮決定する（[risks-and-decisions](risks-and-decisions.md) R-009）
 7. gol-datasetの同名異キャラ衝突を、5のクラスタリング結果から検証する
 
 ## 関連資料
 
-- [対応計画（実行フェーズ定義）](08-execution-plan.md)
-- [データセットと日本語frontend](03-data-and-frontend.md)
-- [リスク、意思決定、未解決事項](07-risks-and-decisions.md)
+- [対応計画（実行フェーズ定義）](execution-log.md)
+- [データセットと日本語frontend](data-and-frontend.md)
+- [リスク、意思決定、未解決事項](risks-and-decisions.md)

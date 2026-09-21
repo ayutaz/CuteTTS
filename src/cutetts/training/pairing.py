@@ -16,7 +16,7 @@
 
 voice cloning学習の1 sampleは「あるtarget発話」と「同じ声のreference」の組で決まる。
 このmoduleはmanifestのrecord列からその組を **決定的に** 作り、
-``docs/japanese-training/07-risks-and-decisions.md`` R-004（reference/target leakage）が
+``docs/japanese-training/risks-and-decisions.md`` R-004（reference/target leakage）が
 挙げる失敗を構造的に潰す。
 
 設計上の前提（``docs/japanese-training/data-inventory.md``「影響 0」「影響 3」）:

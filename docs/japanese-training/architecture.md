@@ -152,7 +152,7 @@ VAEの公開weightはTTS本体とは別componentです。ローカル実装の `
 S0（7.15時間の日本語継続学習）を通過しました。既存の推論pathには手を入れていません。
 `training_forward` は公開moduleの `prepare_input_embeds` / `forward_lm` / `head._predict` を
 そのまま呼び、学習時だけ `config.scale_acoustic_latent` を一時的に無効化します
-（正規化はdataset側で済ませるため）。詳細は [04章](04-training-implementation.md)。
+（正規化はdataset側で済ませるため）。詳細は [training-implementation](training-implementation.md)。
 
 ## 8. ライセンス
 
@@ -167,6 +167,6 @@ S0（7.15時間の日本語継続学習）を通過しました。既存の推�
 
 ## 関連資料
 
-- [日本語継続学習の方針](02-continual-training-strategy.md)
-- [学習コード復元・実装計画](04-training-implementation.md)
+- [リスクと意思決定](risks-and-decisions.md)
+- [学習コード復元・実装計画](training-implementation.md)
 - [一次資料](references.md)

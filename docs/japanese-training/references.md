@@ -68,7 +68,7 @@
   `niobures/CuteTTS` はupstreamの推論コードzip + weight + 論文PDFのミラーで、学習コードは入っていない。
   `hugging-apps/cutetts-demo` はHF公式チームが作った推論demo
 - 論文appendixが明記している精度は **VAEのFP32だけ**。base / distillの学習精度は書かれていない。
-  appendixのhyperparameterは[04章](04-training-implementation.md)第3節の値と一致する
+  appendixのhyperparameterは[training-implementation](training-implementation.md)第3節の値と一致する
 
 ## ローカル実装
 

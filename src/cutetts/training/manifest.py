@@ -14,7 +14,7 @@
 
 """日本語継続学習の共通データ入口（JSONL manifest）。
 
-``docs/japanese-training/03-data-and-frontend.md`` 第2節のschemaを、P1dで実際に扱う
+``docs/japanese-training/data-and-frontend.md`` 第2節のschemaを、P1dで実際に扱う
 2 dataset（gol-dataset / moe-speech-plus）へ絞って確定させたもの。
 学習・評価・前処理（latent cache）はすべてこのmanifestを入口にする。
 

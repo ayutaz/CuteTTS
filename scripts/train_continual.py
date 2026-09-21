@@ -22,7 +22,7 @@ P2 で作った部品を繋ぐだけで、新しい学習semanticsはここに�
 * `forward.training_forward` … loss を計算する
 * `checkpointing`          … save/resume（RNG含む）
 
-継続学習の設定は論文のpretraining値をそのまま使わない（04章 第4節）。
+継続学習の設定は論文のpretraining値をそのまま使わない（training-implementation 第4節）。
 S0 では小さめのLRから始め、実測で調整する。
 """
 

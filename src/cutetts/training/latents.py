@@ -14,7 +14,7 @@
 
 """Audio VAE latent cache（P1e）。
 
-``docs/japanese-training/08-execution-plan.md`` の P1e を実装する。
+``docs/japanese-training/execution-log.md`` の P1e を実装する。
 全音声を1パスで読み、Audio VAE latent（12.5 Hz x 64 dim）を fp16 で保存しておくと、
 学習時に元音声（gol全体で 7 TB）が不要になる。fp16 latentなら gol 10,654 h で約 61 GB。
 
@@ -115,7 +115,7 @@ class CacheMetaMismatch(RuntimeError):
     """既存cacheのmetaが期待と食い違うときに投げる。
 
     「別のVAE checkpointで作ったlatentを黙って学習に混ぜる」事故を防ぐための例外。
-    08-execution-plan.md P1e のゴール「不一致のcacheをloadすると例外になる」に対応する。
+    execution-log.md P1e のゴール「不一致のcacheをloadすると例外になる」に対応する。
     """
 
 
