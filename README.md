@@ -5,6 +5,7 @@
 <a href="https://huggingface.co/OPPOer/CuteTTS"><img src="https://img.shields.io/badge/%F0%9F%A4%97%20HF%20Model-CuteTTS-yellow" alt="CuteTTS Hugging Face model"></a>
 <a href="https://arxiv.org/abs/2608.08638"><img src="https://img.shields.io/badge/Paper-CuteTTS-red" alt="paper"></a>
 <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue" alt="Apache 2.0"></a>
+<a href="https://huggingface.co/ayousanz/CuteTTS-jp"><img src="https://img.shields.io/badge/%F0%9F%A4%97%20Model-CuteTTS--jp-brightgreen" alt="CuteTTS-jp model"></a>
 
 **CuteTTS の日本語継続学習。**
 [OPPO-Mente-Lab/CuteTTS](https://github.com/OPPO-Mente-Lab/CuteTTS) の fork で、
@@ -41,7 +42,7 @@ CuteTTS-jp が足したのは `src/cutetts/training/`、`scripts/`、`tests/` �
 
 | | 状態 |
 |---|---|
-| 日本語の読み上げ | 読み間違いの割合 **7.58%**。学習前は 30.94%、人間の録音は 5.59% |
+| 日本語の読み上げ | 読み間違いの割合 **7.12%**。学習前は 30.94%、人間の録音は 5.59% |
 | 声のコピー | 初めて聞く声でも12例すべてで話者を寄せられる（元の CuteTTS の能力をそのまま保持） |
 | 逐次生成 | 文全体を待たずに音声を流せる。まとめて生成した場合と**完全に同じ波形**になる |
 | **抑揚のコピー** | **CuteTTS-jp が追加した機能。** 同じ台詞を読んだ人間の録音があれば、その声の高さの動きを写せる |
@@ -49,8 +50,8 @@ CuteTTS-jp が足したのは `src/cutetts/training/`、`scripts/`、`tests/` �
 | 英語 | **壊れていません**（単語誤り率 1.7%、学習前と同じ） |
 | 中国語 | **壊れました**（文字誤り率 11.5% → 77.2%）。日本語に特化すると決めた結果です |
 
-> **学習済みのモデルファイルは公開していません。** 公開してよい範囲をまだ決めていないためです。
-> 学習に使う前処理済みのデータは公開してあるので、
+> **学習済みモデルを公開しました**: [`ayousanz/CuteTTS-jp`](https://huggingface.co/ayousanz/CuteTTS-jp)（Apache 2.0）。
+> 学習に使う前処理済みのデータも公開してあるので、
 > **2 GB ほどダウンロードすれば同じ学習をやり直せます**（[学習を再現する](#学習を再現する)）。
 
 ## 結果
@@ -313,7 +314,11 @@ CuteTTS-jp で実際に誤った結論を出したものです。
   MoeSpeech の利用条件は「音声ファイルを1つでも公開すれば再配布とみなす」と
   定めています。**モデルが生成した音声も同じ扱いにしてください**
 - **話者のIDを匿名化されたものとして扱わないでください。**
-  このIDは表示名をハッシュしただけなので、**名前の一覧があれば元に戻せます**
+  このIDは表示名をハッシュしただけなので、**名前の一覧があれば元に戻せます**。
+  公開したモデルには**話者IDも作品名も含めていません**
+- **公開したモデルは参照音声から声をまねられます。**
+  本人の同意なく実在の人の声をまねること、なりすまし、誤情報の拡散には使わないでください。
+  生成した音声を公開するときは**合成音声であることを明示**してください
 - 公開している中間表現は音声へ復元できるので、**音声と同じ扱い**にしています
 - 学習済みモデルを公開してよいかは、まだ決めていません
 
