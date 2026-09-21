@@ -50,7 +50,7 @@ CuteTTS-jp が足したのは `src/cutetts/training/`、`scripts/`、`tests/` �
 | 英語 | **壊れていません**（単語誤り率 1.7%、学習前と同じ） |
 | 中国語 | **壊れました**（文字誤り率 11.5% → 77.2%）。日本語に特化すると決めた結果です |
 
-> **学習済みモデルを公開しました**: [`ayousanz/CuteTTS-jp`](https://huggingface.co/ayousanz/CuteTTS-jp)（Apache 2.0）。
+> **学習済みモデルを公開しました**: [`ayousanz/CuteTTS-jp`](https://huggingface.co/ayousanz/CuteTTS-jp)（CC BY-SA 4.0）。
 > 学習に使う前処理済みのデータも公開してあるので、
 > **2 GB ほどダウンロードすれば同じ学習をやり直せます**（[学習を再現する](#学習を再現する)）。
 
@@ -332,8 +332,11 @@ CuteTTS-jp で実際に誤った結論を出したものです。
 
 ## License
 
-Apache License 2.0 です。元になった CuteTTS の著作権表示
+**コード: Apache License 2.0。** 元になった CuteTTS の著作権表示
 （Copyright 2026 OPPO and Fudan University）はそのまま残しています。
 CuteTTS-jp が追加した日本語学習のコードは Copyright 2026 ayutaz です。
 他のプロジェクトから取り入れた部分は、それぞれの著作権表示とライセンスに従います
 （[NOTICE](NOTICE)）。
+
+**学習済みモデル（重み）: [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/deed.ja)。**
+[`ayousanz/CuteTTS-jp`](https://huggingface.co/ayousanz/CuteTTS-jp) で公開しています。
