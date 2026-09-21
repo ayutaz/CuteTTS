@@ -43,6 +43,7 @@ import soundfile as sf  # noqa: E402
 from cutetts import CuteTTS  # noqa: E402
 from cutetts.training.listening_page import render  # noqa: E402
 from cutetts.training.reading import expand_kanji_numerals  # noqa: E402
+from cutetts.training.yomi import ReadingAssigner, frontend_text  # noqa: E402
 
 
 def pick(items: list, count: int, seed: int) -> list:
@@ -68,6 +69,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--phonetic", type=int, default=6)
     parser.add_argument("--numerals", type=int, default=6)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument("--frontend", default="none",
+                        help="**学習した側にだけ**掛ける frontend（M4a）。"
+                        "`m4a-accent` 系は `accent` が要る。**base には掛けない** — "
+                        "公開checkpointは片仮名や記号を学習していないので、"
+                        "掛けると分布外の入力で不当に不利になる")
     parser.add_argument("--seed", type=int, default=20260903)
     return parser
 
@@ -132,6 +138,10 @@ def main() -> None:
     print(f"生成する文: {len(plan)}（会話文 {args.conversational} / "
           f"音韻 {args.phonetic} / 数詞 {args.numerals}）")
 
+    # `yomi` 系の frontend だけが読み付与を要る（`accent` / `kana_full` は要らない）
+    assigner = (ReadingAssigner.from_model_dir(args.model_dir)
+                if args.frontend == "yomi" else None)
+
     models = {"base": args.base_dir, "trained": args.model_dir}
     entries: list[dict] = []
     for name, directory in models.items():
@@ -143,6 +153,10 @@ def main() -> None:
                 variants = [("_raw", False), ("_j2", True)]
             for suffix, expand in variants:
                 text = expand_kanji_numerals(spec["text"]) if expand else spec["text"]
+                # **frontend は学習した側にだけ掛ける。** base は片仮名も記号も
+                # 学習していないので、掛けると分布外の入力で不当に不利になる
+                if name == "trained" and args.frontend != "none":
+                    text = frontend_text(text, args.frontend, assigner=assigner)
                 result = model.generate(
                     text, mode="voice_clone", reference_audio=args.reference_audio,
                     seed=42, max_decode_length=400, show_progress=False,
@@ -180,6 +194,9 @@ def main() -> None:
     manifest = {
         "seed": args.seed,
         "models": models,
+        # **どの frontend で聴かせたかを残す。** 後から「素の漢字を渡した音」と
+        # 混同すると、聴取の結論が別のモデルの話になる
+        "frontend": args.frontend,
         "entries": entries,
         "anchors": anchors,
         # 盲検A/Bで左右どちらに学習後を置くか。項目ごとに固定
