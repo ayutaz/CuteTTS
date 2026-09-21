@@ -2,14 +2,36 @@
 
 | 文書 | 内容 |
 |---|---|
-| [RESULTS.md](japanese-training/RESULTS.md) | **実測値の一覧。まずここ** |
-| [risks-and-decisions.md](japanese-training/risks-and-decisions.md) | リスク（R-001〜R-061）と意思決定（D-001〜D-055） |
-| [execution-log.md](japanese-training/execution-log.md) | 各フェーズの目的・ゴール・結果 |
-| [architecture.md](japanese-training/architecture.md) | CuteTTS の構成と、変更で壊しやすい箇所 |
-| [training-implementation.md](japanese-training/training-implementation.md) | 学習式の復元、fp32 master weights、latent cache |
-| [data-and-frontend.md](japanese-training/data-and-frontend.md) | データ設計と日本語 frontend |
-| [data-inventory.md](japanese-training/data-inventory.md) | データの実態調査 |
-| [references.md](japanese-training/references.md) | 一次資料 |
+| [RESULTS.md](japanese-training/RESULTS.md) | **測った値の一覧。まずここ** |
+| [risks-and-decisions.md](japanese-training/risks-and-decisions.md) | **つまずいた点（R-001〜R-061）と、下した判断（D-001〜D-055）** |
+| [execution-log.md](japanese-training/execution-log.md) | 各段階で何を目指し、どうなったか |
+| [architecture.md](japanese-training/architecture.md) | CuteTTS の仕組みと、触ると壊れやすい箇所 |
+| [training-implementation.md](japanese-training/training-implementation.md) | 学習の式をどう復元したか。重みの形式、音声の中間表現の作り置き |
+| [data-and-frontend.md](japanese-training/data-and-frontend.md) | データの設計と、日本語テキストの前処理 |
+| [data-inventory.md](japanese-training/data-inventory.md) | 手元のデータに何がどれだけあるかの調査 |
+| [references.md](japanese-training/references.md) | 参照した一次資料 |
 
-文書は情報を **確認済み / 決定済み / 提案 / 未確定** の4状態で区別します。
-「実装した」と「日本語学習が成功した」を混同しないための規約です。
+文書では情報を **確認済み / 決定済み / 提案 / 未確定** の4つに分けて書いています。
+「作った」と「良くなった」を混同しないための決まりです。
+
+## よく出てくる言葉
+
+記録のほうは短く書くために専門的な言い方をしています。対応は次のとおりです。
+
+| 言い方 | 意味 |
+|---|---|
+| **床** | 人間が読んだ本物の音声を、モデルの出力とまったく同じ手順で測ったときの誤り。**測定側の誤差**なので、これより良い値は出ません |
+| **上限** | 音声を一度圧縮して戻すだけで落ちてしまう値。**その指標で測れる限界**です |
+| **天井** | 同じ台詞を人間が読み直したときの一致度。**人間どうしでもここまで**という値 |
+| **梃子（てこ）** | 変えると結果が大きく動く要素。「梃子ではなかった」は「変えても結果が動かなかった」 |
+| **有意 / 有意差なし** | 差がばらつきの範囲を超えているか。**超えていなければ「差があった」とは言いません** |
+| **CER** | 文字誤り率。自動で文字起こしした結果を正解と比べ、間違った文字の割合を出したもの |
+| **読みCER** | 上を**読み方だけ**で比べたもの。`なにも` と `何も` のような書き方の違いを誤りに数えません |
+| **frontend** | モデルに渡す前のテキスト変換。漢数字を仮名に開く、全文を片仮名にする、など |
+| **latent** | 音声を圧縮した数値の列。元の音声へ戻せるので、音声と同じ扱いにしています |
+| **checkpoint** | ある時点の学習済みモデル一式 |
+| **step** | 学習の更新回数。1 step で重みを1回だけ更新します |
+| **輪郭** | 声の高さが文の中でどう上下するか、その形 |
+| **アクセント核** | 語の中で声の高さが下がる直前の位置。`ハ↓シ`（箸）と `ハシ↓`（橋）を分ける |
+| **oracle / mismatch** | 抑揚を測るときの条件。**oracle** はその文を読んだ本物の録音を渡した場合、**mismatch** は別の文の録音を渡した場合 |
+| **zero-shot** | 学習に使っていない話者の声をまねさせること |
