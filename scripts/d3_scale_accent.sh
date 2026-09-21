@@ -49,7 +49,7 @@ export PATH="$WORKDIR/.venv/bin:/root/.local/bin:$PATH"
 export PYTHONIOENCODING=utf-8
 
 python -c "import accelerate, transformers, soundfile, pyopenjtalk" || {
-  echo "依存が足りない。pip install -e '.[ja,prosody,eval]'" >&2; exit 1; }
+  echo "依存が足りない。uv sync --all-extras" >&2; exit 1; }
 
 MANIFEST="data/s1v2/manifests-v2/all_clustered.jsonl"
 LATENTS="data/s1v2/latents-v2"

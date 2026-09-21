@@ -2526,7 +2526,7 @@ SudachiPy はすべて正解。janome は `砂肝`→`すなきも` と濁点を
 onnxruntime + protobuf + flatbuffers で100MB超を、効果ゼロで抱えることになる。
 
 **依存は core ではなく `[ja]` extra に置く。** upstream の推論には不要なので、
-`pip install -e .` では入らない。`pip install -e .[ja]` で入る。
+core の依存には入っていない。`uv sync --all-extras` で入る。
 `sudachipy` / `sudachidict-core` は pyopenjtalk-plus の**必須依存**（内部で使用）。
 
 ### J3 の射程（原理的な限界。実測で確認）

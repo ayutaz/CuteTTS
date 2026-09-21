@@ -55,7 +55,7 @@ cd "$WORKDIR"
 
 # ---------------------------------------------------------------- 準備
 python -c "import accelerate, transformers, soundfile, pyworld, pyopenjtalk" || {
-  echo "依存が足りない。pip install -e '.[ja,prosody,eval]'" >&2
+  echo "依存が足りない。uv sync --all-extras" >&2
   exit 1
 }
 

@@ -43,7 +43,7 @@ fi
 cd "$WORKDIR"
 
 python -c "import accelerate, transformers, soundfile, pyworld, pyopenjtalk" || {
-  echo "依存が足りない。pip install -e '.[ja,prosody,eval]'" >&2; exit 1; }
+  echo "依存が足りない。uv sync --all-extras" >&2; exit 1; }
 
 # **抑揚setの音声を先に揃える。** ここを忘れると学習とCER評価が終わった後に
 # `soundfile.LibsndfileError` で落ちる（実測で3.9時間インスタンスを遊ばせた）。

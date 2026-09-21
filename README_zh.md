@@ -35,14 +35,16 @@
 
 ## 安装
 
-**使用 conda**
+**使用 [uv](https://docs.astral.sh/uv/)**（本 fork 使用 uv，不使用 pip）
 
 ```bash
-conda create -n cutetts python=3.12 -y
-conda activate cutetts
-pip install torch==2.5.1 torchaudio==2.5.1  # 如使用支持 CUDA 12.1 的 NVIDIA GPU，请在末尾添加：--index-url https://download.pytorch.org/whl/cu121
-pip install -e .
+uv sync --all-extras
 ```
+
+该命令会创建 `.venv`（Python 3.12）并安装 CUDA 12.1 版的 torch 2.5.1。
+PyTorch 的 index 已在 `pyproject.toml` 中声明，因此 `uv sync` 不会用 PyPI 的
+CPU 版覆盖它。macOS 会回退到 PyPI（MPS 版），Windows 还会自动安装
+`triton-windows`。请统一使用 `uv run` 执行命令，用 `uv add <package>` 添加依赖。
 
 **下载权重**
 将 [CuteTTS](https://huggingface.co/OPPOer/CuteTTS) 或 [CuteTTS-distill](https://huggingface.co/OPPOer/CuteTTS-distill) 下载到 `./model` 目录:

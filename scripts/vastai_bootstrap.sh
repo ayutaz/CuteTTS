@@ -35,11 +35,13 @@ cd "$WORKDIR"
 echo "  commit: $(git rev-parse --short HEAD)"
 
 echo "=== 3/5 Python依存 ==="
-# ベースイメージに torch 2.5.1 + cu121 が入っている前提。無ければ入れる。
-python -c "import torch; assert torch.__version__.startswith('2.5.1')" 2>/dev/null || \
-  pip install -q torch==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121
-pip install -q -e . 2>&1 | tail -2
-pip install -q pytest pyyaml huggingface_hub accelerate 2>&1 | tail -1
+# **uv だけで揃える。`pip` は使わない。** torch を PyTorch の cu121 index から
+# 取る設定は pyproject.toml に宣言してあるので、`uv sync` が cu121 版を入れる。
+# ベースイメージの Python が 3.12 でなくても uv が 3.12 を用意する。
+command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="/root/.local/bin:$PATH"
+uv sync --all-extras
+export PATH="$WORKDIR/.venv/bin:$PATH"
 python - <<'PY'
 import torch
 print(f"  torch {torch.__version__}  cuda={torch.cuda.is_available()}")
@@ -51,7 +53,7 @@ PY
 echo "=== 4/5 checkpoint ==="
 if [ ! -f model/CuteTTS/config.json ]; then
   mkdir -p model
-  hf download OPPOer/CuteTTS --local-dir ./model/CuteTTS >/dev/null
+  uv run hf download OPPOer/CuteTTS --local-dir ./model/CuteTTS >/dev/null
 fi
 du -sh model/CuteTTS
 

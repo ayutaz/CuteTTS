@@ -75,32 +75,41 @@ CuteTTS-jp が追加したのは `src/cutetts/training/`、`scripts/`、`tests/`
 
 ## セットアップ
 
-**Python 3.12 固定**です（torch 2.5.1 の対応は 3.9〜3.12。既定が 3.13 以降の環境では動きません）。
+[uv](https://docs.astral.sh/uv/) を使います。**これ1行で終わります。**
 
 ```bash
-uv venv --python 3.12 .venv
-uv pip install --python .venv/bin/python torch==2.5.1 torchaudio==2.5.1 \
-  --index-url https://download.pytorch.org/whl/cu121      # CUDA 12.1
-uv pip install --python .venv/bin/python -e .
-uv pip install --python .venv/bin/python -e ".[ja]"       # 日本語の読み付与
-uv pip install --python .venv/bin/python -e ".[eval]"     # CER評価（accelerate が要る）
-uv pip install --python .venv/bin/python -e ".[dev]"      # テスト
+uv sync --all-extras
 ```
 
-Windows では `.venv/Scripts/python.exe` を使い、`triton-windows` も入れてください
-（未導入だと distill 版が動きません）。`uv` が無ければ `py -3.12 -m venv .venv` でも作れます。
+`.venv`（Python 3.12）の作成、**CUDA 12.1 版の torch 2.5.1**、日本語の読み付与、
+抑揚の測定、CER評価、テストまで入ります。以降はすべて `uv run` で実行します。
+
+```bash
+uv run python -m pytest tests/training -q     # テスト
+uv run cutetts --help                         # upstream の CLI
+```
+
+| | |
+|---|---|
+| **Python 3.12 固定** | torch 2.5.1 の対応は 3.9〜3.12。`uv` が 3.12 を用意します |
+| **torch は PyTorch の index から** | `pyproject.toml` の `[[tool.uv.index]]` で宣言済み。**PyPI の CPU 版で上書きされません** |
+| **macOS** | cu121 の wheel が無いので PyPI（MPS 版）へ落ちます |
+| **Windows** | `triton-windows` が自動で入ります（distill 版に必要） |
+
+依存を足すときも **`uv add <package>`** で、`pip` は使いません。
 
 ```bash
 mkdir -p ./model
-hf download OPPOer/CuteTTS --local-dir ./model/CuteTTS
+uv run hf download OPPOer/CuteTTS --local-dir ./model/CuteTTS
 ```
+
 
 ## 使う
 
 ### 日本語で合成する
 
 ```bash
-python scripts/synthesize_japanese.py \
+uv run python scripts/synthesize_japanese.py \
   --model-dir <日本語checkpoint>/inference \
   --text "価格は千二百八十円、消費税込みです。" \
   --reference-audio assets/default_reference.wav \
@@ -126,7 +135,7 @@ upstream の `cutetts` CLI と Python API はそのまま使えます（[README_
 **同じ台詞を読んだ人間の音声から F0 の輪郭を写せます。**
 
 ```bash
-python scripts/synthesize_japanese.py \
+uv run python scripts/synthesize_japanese.py \
   --model-dir <韻律転写対応checkpoint>/inference \
   --text "..." \
   --reference-audio <声質の参照> \
@@ -150,7 +159,7 @@ python scripts/synthesize_japanese.py \
 ```bash
 hf download tts-dataset/cutetts-ja-latents --repo-type dataset --local-dir data/s1v2
 
-python scripts/train_continual.py \
+uv run python scripts/train_continual.py \
   --manifest data/s1v2/manifests-v2/all_clustered.jsonl \
   --latent-cache data/s1v2/latents-v2 --speaker-cache data/s1v2/speaker-v2 \
   --model-dir model/CuteTTS \
@@ -171,12 +180,12 @@ RTX 3090 で 30,000 step が約 1.4 時間です。
 ## 評価する
 
 ```bash
-python scripts/evaluate_japanese_cer.py \
+uv run python scripts/evaluate_japanese_cer.py \
   --model-dir checkpoints/run/inference --frontend accent \
   --eval-set data/eval/eval_set_v3.json --label run --device cuda
 
 # **点推定の順位ではなく信頼区間で判断する**
-python scripts/summarize_eval_runs.py --metric cer_reading --compare v3-base run
+uv run python scripts/summarize_eval_runs.py --metric cer_reading --compare v3-base run
 ```
 
 **評価set v3（600文）を使ってください。** 旧v2（30文）は検出できる最小差が **6.9pt** で、

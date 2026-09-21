@@ -33,7 +33,7 @@ cd "$WORKDIR"
   echo "無い: $SET（ローカルの build_retake_set.py で作って転送する）" >&2; exit 1; }
 
 python -c "import pyworld, pyopenjtalk, torchaudio, soundfile" || {
-  echo "依存が足りない。pip install -e '.[ja,prosody,eval]'" >&2; exit 1; }
+  echo "依存が足りない。uv sync --all-extras" >&2; exit 1; }
 
 # ---------------------------------------------------------------- 音声
 echo "=== 音声を取り出す（tarは1本ずつ落として消す）==="

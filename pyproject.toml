@@ -19,6 +19,7 @@ license-files = [
 ]
 dependencies = [
   "fastapi>=0.115,<1",
+  "huggingface-hub>=0.26",
   "loguru>=0.7,<1",
   "numpy>=1.26,<3",
   "python-multipart>=0.0.18,<1",
@@ -29,6 +30,7 @@ dependencies = [
   "torchaudio==2.5.1",
   "tqdm>=4.66,<5",
   "transformers==4.51.0",
+  "triton-windows>=3.8,<4 ; sys_platform == 'win32'",
   "uvicorn[standard]>=0.34,<1",
 ]
 
@@ -75,6 +77,27 @@ eval = [
   "transformers>=4.44,<5",
   "accelerate>=0.30",
   "soundfile>=0.12",
+]
+
+# ---------------------------------------------------------------- uv
+# **torch は PyPI ではなく PyTorch の cu121 index から取る。**
+# ここを宣言しないと `uv sync` が PyPI の CPU 版で上書きしてしまい、
+# 別途 cu121 を入れておく → `--no-sync` を付け続ける、という運用になる。
+# 宣言しておけば `uv sync` だけで cu121 が入る。
+#
+# macOS には cu121 の wheel が無いので PyPI へ落とす（MPS 版が入る）。
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+# **explicit = true が要る。** 外すと他の依存までこの index から探しに行く
+explicit = true
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cu121", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchaudio = [
+  { index = "pytorch-cu121", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 
 [project.scripts]

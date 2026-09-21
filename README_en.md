@@ -35,14 +35,17 @@
 
 ## Install
 
-**Using conda**
+**Using [uv](https://docs.astral.sh/uv/)** (this fork uses uv, not pip)
 
 ```bash
-conda create -n cutetts python=3.12 -y
-conda activate cutetts
-pip install torch==2.5.1 torchaudio==2.5.1  # For NVIDIA GPUs with CUDA 12.1, append: --index-url https://download.pytorch.org/whl/cu121
-pip install -e .
+uv sync --all-extras
 ```
+
+This creates `.venv` (Python 3.12) and installs the CUDA 12.1 build of
+torch 2.5.1 — the PyTorch index is declared in `pyproject.toml`, so a plain
+`uv sync` will not overwrite it with the CPU wheel from PyPI. On macOS it
+falls back to PyPI (MPS build); on Windows it also installs `triton-windows`.
+Run everything through `uv run`, and add dependencies with `uv add <package>`.
 
 **Download weights**
 

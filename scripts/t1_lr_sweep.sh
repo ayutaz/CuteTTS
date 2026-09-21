@@ -43,7 +43,8 @@ cd "$WORKDIR"
 # ---------------------------------------------------------------- 準備
 echo "=== 準備 ==="
 # **vast.ai の pytorch イメージは Python 3.11 で、`pyproject.toml` は 3.12 固定。**
-# uv で 3.12 の venv を作る（`uv` のvenvには pip が入らないので `uv pip` を使う）。
+# uv で 3.12 の環境を作る。**`uv sync` だけで揃う**（torch の cu121 index は
+# pyproject.toml に宣言済み）。
 if python -c 'import sys; sys.exit(0 if sys.version_info[:2]==(3,12) else 1)' 2>/dev/null \
    && python -c 'import torch, pyopenjtalk, pyworld' 2>/dev/null; then
   echo "  既に整っている（$(python -V 2>&1)）"
@@ -53,10 +54,7 @@ else
   [ -d .venv ] || uv venv --python 3.12 .venv
   # shellcheck disable=SC1091
   . .venv/bin/activate
-  uv pip install -q torch==2.5.1 torchaudio==2.5.1 \
-    --index-url https://download.pytorch.org/whl/cu121
-  uv pip install -q -e ".[ja,prosody,eval]"
-  uv pip install -q "huggingface_hub[cli]"
+  uv sync --all-extras
 fi
 # **ASRの読み込みに accelerate が要る。** 無いと transformers が
 # `NameError: init_empty_weights` で落ちる（vast.aiの素の環境で実測）

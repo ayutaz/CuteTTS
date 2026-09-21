@@ -150,14 +150,17 @@ conditioner の metadata から取るので、2箇所に書くと学習・評価
 
 ## 実行環境とGPUの規約
 
-0. **vast.ai のイメージは Python 3.11。** `pyproject.toml` は
-   `>=3.12,<3.13` を要求するので、`pip install -e .` が
-   `requires a different Python` で落ちる。**uv で 3.12 の venv を作る**:
-   `uv venv --python 3.12 .venv` →
-   `uv pip install --python .venv/bin/python torch==2.5.1 torchaudio==2.5.1
-   --index-url https://download.pytorch.org/whl/cu121` →
-   `uv pip install --python .venv/bin/python -e ".[ja,prosody,eval]"`。
-1. **Python は `uv run --no-sync python`（ユーザー指示。2026-09-19）。**リポジトリルートから実行する。**`--no-sync` を外さない** — `uv run` が pyproject から同期し直して torch 2.5.1+cu121 を入れ替えてしまう。中身は `.venv/Scripts/python.exe` で同じ。
+0. **`uv sync --all-extras` だけで環境が揃う。`pip` / `uv pip` は使わない**
+   （ユーザー指示。2026-09-21）。`.venv`（Python 3.12）の作成、**cu121 版の
+   torch 2.5.1**、ja / prosody / eval / dev のすべてが入る。
+   **torch を PyTorch の index から取る設定は `pyproject.toml` に宣言済み**
+   （`[[tool.uv.index]] pytorch-cu121` + `[tool.uv.sources]`）なので、
+   `uv sync` が PyPI の CPU 版で上書きすることはない。
+   vast.ai のイメージが Python 3.11 でも uv が 3.12 を用意する。
+   依存を足すときは **`uv add <package>`**。
+1. **Python は `uv run python`**（ユーザー指示。2026-09-19）。リポジトリルートから実行する。
+   ~~`--no-sync` を外さない~~ → **不要になった**（2026-09-21）。index を宣言したので
+   同期し直しても cu121 版のまま。中身は `.venv/Scripts/python.exe` で同じ。
    システム既定は3.14で torch 2.5.1 が動かない（対応は3.9〜3.12）。
 2. **GPUはすべて vast.ai を使う。ローカルGPUは使わない**（D-023 / D-024、2026-09-15）。
    起動前に**費用見積もりを提示する**。終わったらインスタンスを破棄する。
@@ -172,26 +175,20 @@ conditioner の metadata から取るので、2箇所に書くと学習・評価
 ## セットアップ（未構築のとき）
 
 ```bash
-uv venv --python 3.12 .venv
-uv pip install --python .venv/Scripts/python.exe torch==2.5.1 torchaudio==2.5.1 \
-  --index-url https://download.pytorch.org/whl/cu121
-uv pip install --python .venv/Scripts/python.exe -e .
-uv pip install --python .venv/Scripts/python.exe pytest pyyaml triton-windows
-
-# J3（読み付与）と読みCER（R-029）に要る。**upstream推論には不要なので core には入っていない**
-uv pip install --python .venv/Scripts/python.exe -e ".[ja]"
+uv sync --all-extras
 ```
+
+**これだけ。** `.venv`（Python 3.12）・cu121 版 torch 2.5.1・`[ja]`（読み付与）・
+`[prosody]`（抑揚）・`[eval]`（CER）・`[dev]`（テスト）・`triton-windows`（Windowsのみ）
+がすべて入る。**`uv.lock` があるので毎回同じ版が入る。**
 
 `[ja]` は `pyopenjtalk-plus`（+ 必須依存の sudachipy / sudachidict-core、計332MB）。
 4候補を実測比較して選んだ（D-035）。**`[onnxruntime]` extra は入れない**
 — 有効化しても14語すべて結果が同一で、架空の人名も直らなかった。
 `pyopenjtalk` 本家は Windows wheel が無くビルドが失敗する。**fork の `-plus` を使う。**
 
-`uv` が無ければ `py -3.12 -m venv .venv` で作り、以降は
-`.venv/Scripts/python.exe -m pip install ...` で代用できる。
-
-checkpointとデータの取得には Hugging Face CLI が要る（`pip install -U huggingface_hub`、
-`hf auth login` で認証）。両datasetは gated なのでアクセス権が必要。
+checkpointとデータの取得には Hugging Face CLI が要る。**`uv sync` で入る**ので、
+`uv run hf auth login` で認証するだけでよい。両datasetは gated なのでアクセス権が必要。
 
 ```bash
 hf download OPPOer/CuteTTS --local-dir ./model/CuteTTS
@@ -452,7 +449,7 @@ Pythonは CRLF でも動くので、**shellスクリプトだけが静かに壊�
 | **dev flow の分離を過適合と読む** | 30,000 step で dev-zero-shot flow は base より悪化するが、CERは改善し話者追随も保たれた。**flow lossは品質の指標にならない**（R-015の3例目） |
 | 誤読が直らない | 主因は byte-fallback。`華` は単独pieceを持たず3つのバイト断片になる（R-027）。**J3（`--assign-yomi` / `synthesize_japanese.py` は既定で有効）が機械化済み**。読みCERで -4.23pt [-5.44, -3.05]。作品固有名（`藤宮高邦`）は一般語辞書では直らない |
 | 中国語が壊れている | **仕様**。日本語学習で漢字の読みが上書きされ、CER 11.5% → 77.2%（R-022）。D-032で日本語特化と決定。英語は無傷（WER 1.7%）。中国語CERは回帰の監視指標としてのみ使う |
-| **vast.aiで評価が即死する** | `accelerate` が無いと `transformers` のモデル読み込みが `NameError: init_empty_weights` で落ちる。**ローカルには偶然入っていることがある**。`pip install -e ".[eval]"` |
+| **vast.aiで評価が即死する** | `accelerate` が無いと `transformers` のモデル読み込みが `NameError: init_empty_weights` で落ちる。**ローカルには偶然入っていることがある**。`uv sync --all-extras` |
 | **shard結合が静かに壊れる** | ログ末尾は `完了: artifacts/<phase>/<timestamp>` で`metrics.json` は出ない。pathを組み立て直すこと。`--merge` にも `--eval-set` を渡す（抑揚側は既定値が存在するので**偶然通ってしまう**） |
 | **データ版を取り違える** | HF repoに旧版（232,941発話）と v2（286,864発話）が両方ある。`find \| head -1` では旧版を拾う。**取り違えると比較そのものが無意味**。行数で検証する |
 | **評価setJSONのpathがOS依存** | Windowsで書いた `data\\eval\\prosody_audio` はLinuxで**1つのファイル名**になる。`artifacts.as_local_path` で正規化する。**読み側と書き側が同じ間違いをするので動いてしまう** |
@@ -463,7 +460,7 @@ Pythonは CRLF でも動くので、**shellスクリプトだけが静かに壊�
 
 | 症状 | 原因と対処 |
 |---|---|
-| `BackendCompilerFailed: Cannot find a working triton installation` | WindowsのPyTorchにtritonが同梱されない。`uv pip install --python .venv/Scripts/python.exe triton-windows`。検証は `.venv/Scripts/python.exe -c "import triton;print(triton.__version__)"`。未対処だと**distillが全ケース失敗する**。`--sampler-compile-mode eager` でも回避可 |
+| `BackendCompilerFailed: Cannot find a working triton installation` | WindowsのPyTorchにtritonが同梱されない。`uv sync --all-extras`（`triton-windows` は Windows で自動的に入る）。検証は `.venv/Scripts/python.exe -c "import triton;print(triton.__version__)"`。未対処だと**distillが全ケース失敗する**。`--sampler-compile-mode eager` でも回避可 |
 | `UnicodeEncodeError: 'cp932'` | stdoutがcp932。`PYTHONIOENCODING=utf-8` を付けるか、ファイルへUTF-8明示で書く |
 | `ModuleNotFoundError` | システムPythonで実行している。`.venv/Scripts/python.exe` を使う。venv側で出るなら上のセットアップを実行 |
 | `No usable checkpoint under ...` | `--checkpoint` にパスを渡した。**ディレクトリ名**（`CuteTTS-distill`）を渡す |

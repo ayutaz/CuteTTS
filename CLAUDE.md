@@ -20,19 +20,23 @@ CuteTTS-jp の目的は `docs/japanese-training/` にある通り、公開base c
 セットアップ（**Python 3.12 固定**。`requires-python = ">=3.12,<3.13"`）:
 
 ```bash
-pip install torch==2.5.1 torchaudio==2.5.1  # CUDA 12.1なら --index-url https://download.pytorch.org/whl/cu121
-pip install -e .
-pip install -e ".[ja]"        # J3（読み付与）。pyopenjtalk-plus（D-035）
-pip install -e ".[prosody]"   # M1（抑揚・アクセント）。pyworld（D-040）
-pip install -e ".[eval]"      # CER評価。**accelerate が無いとASRが読めない**
+uv sync --all-extras
 ```
+
+**これだけで済む。`pip` は使わない**（2026-09-21、ユーザー指示）。
+`.venv` の作成・**cu121 版 torch 2.5.1**・ja（読み付与）・prosody（抑揚）・
+eval（CER。**accelerate が無いとASRが読めない**）・dev（テスト）がすべて入る。
+
+**torch を別 index から取る設定は `pyproject.toml` に宣言済み**
+（`[[tool.uv.index]] pytorch-cu121` + `[tool.uv.sources]`）。
+**だから `--no-sync` は要らない。** 依存を足すときは `uv add <package>`。
 
 weightの取得（`model/` は .gitignore 済み）:
 
 ```bash
 mkdir -p ./model
-hf download OPPOer/CuteTTS --local-dir ./model/CuteTTS
-hf download OPPOer/CuteTTS-distill --local-dir ./model/CuteTTS-distill
+uv run hf download OPPOer/CuteTTS --local-dir ./model/CuteTTS
+uv run hf download OPPOer/CuteTTS-distill --local-dir ./model/CuteTTS-distill
 ```
 
 実行:
@@ -53,15 +57,17 @@ cutetts-demo --model-dir ./model --device auto --host 127.0.0.1 --port 7860
 日本語学習側の作業はリポジトリ直下の `.venv`（Python 3.12 + torch 2.5.1+cu121）で行う。
 
 **Python は uv から実行する**（2026-09-19、ユーザー指示）。
-**`--no-sync` を付ける。** 付けないと `uv run` が pyproject から環境を
-同期し直すので、別途入れた torch 2.5.1+cu121 を入れ替えてしまう。
 
 ```bash
-uv run --no-sync python -m pytest tests/training -v   # テスト
-uv run --no-sync python scripts/<name>.py --config configs/japanese/<name>.yaml
+uv run python -m pytest tests/training -v   # テスト
+uv run python scripts/<name>.py --config configs/japanese/<name>.yaml
 ```
 
-`uv run --no-sync python -c "import sys; print(sys.executable)"` で
+~~**`--no-sync` を付ける。**~~ → **不要になった**（2026-09-21）。
+torch の index を `pyproject.toml` に宣言したので、`uv run` が同期し直しても
+cu121 版のまま。**`uv pip` も使わない。**
+
+`uv run python -c "import sys; print(sys.executable)"` で
 `.venv/Scripts/python.exe` を指していることを確認できる。
 
 GPUは RTX 4070 Ti SUPER 16 GB（[execution-log](docs/japanese-training/execution-log.md) が想定した4090 24GBより小さい。R-007参照）。
