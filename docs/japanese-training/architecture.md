@@ -119,7 +119,7 @@ VAEの公開weightはTTS本体とは別componentです。ローカル実装の `
 - branch: `feat/japanese-training`
 - 起点: `main`
 - snapshot commit: `ca9dbd3b82c05f5b067466088449b93ee2aa5a0c`
-- `origin`: `https://github.com/ayutaz/CuteTTS.git`
+- `origin`: `https://github.com/ayutaz/CuteTTS-jp.git`
 
 現在の実装には次が含まれます。
 

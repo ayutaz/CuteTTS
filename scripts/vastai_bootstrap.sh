@@ -16,7 +16,7 @@
 # 公開checkpoint (OPPOer/CuteTTS) は token 不要。
 set -euo pipefail
 
-REPO_URL="${REPO_URL:-https://github.com/ayutaz/CuteTTS.git}"
+REPO_URL="${REPO_URL:-https://github.com/ayutaz/CuteTTS-jp.git}"
 BRANCH="${BRANCH:-feat/japanese-training}"
 WORKDIR="${WORKDIR:-/workspace/CuteTTS}"
 
