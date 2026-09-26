@@ -43,6 +43,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -142,6 +143,39 @@ def reading_form(text: str) -> str:
 #:   「区切りがあること」で、戻るなら「アクセントの内容」
 FRONTEND_MODES = ("none", "yomi", "kana_full", "kana_full_clean", "accent",
                   "accent_shuffled", "accent_clean")
+
+
+#: `config.json` が学習時の frontend を名乗っていないときの既定。
+#: **公開している checkpoint（`ayousanz/CuteTTS-jp` = m4h-prosody）は
+#: `accent` で学習している。** 2026-09-26 まで `synthesize_japanese.py` は
+#: frontend を掛けずに素の漢字を渡していて、公開した読みCER 7.12% が
+#: 出ない状態だった。
+DEFAULT_FRONTEND = "accent"
+
+
+def frontend_from_model_dir(model_dir: str | Path) -> str | None:
+    """checkpoint の `config.json` が名乗る学習時の frontend を返す。
+
+    `export_for_inference(frontend=...)` が書いた ``japanese_frontend`` を読む。
+    **持っていない古い checkpoint では ``None``** を返すので、呼ぶ側が
+    既定（:data:`DEFAULT_FRONTEND`）を当てるか利用者に選ばせる。
+
+    推論側の `runtime.py` はこのキーを見ないので、付いていても無害。
+    """
+    config = Path(model_dir) / "config.json"
+    if not config.is_file():
+        return None
+    try:
+        mode = json.loads(config.read_text(encoding="utf-8")).get("japanese_frontend")
+    except (json.JSONDecodeError, OSError):
+        return None
+    if mode is None:
+        return None
+    mode = str(mode)
+    if mode not in FRONTEND_MODES:
+        raise ValueError(
+            f"{config} の japanese_frontend が未知の値: {mode!r}（{FRONTEND_MODES}）")
+    return mode
 
 
 def frontend_text(text: str, mode: str = "none", *,

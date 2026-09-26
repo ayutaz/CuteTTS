@@ -151,6 +151,7 @@ def export_for_inference(
     model: CuteTTSModel,
     source_model_dir: str | Path,
     dtypes: dict[str, torch.dtype] | None = None,
+    frontend: str | None = None,
 ) -> Path:
     """推論の `CuteTTS.from_pretrained` が読めるディレクトリを書き出す。
 
@@ -161,6 +162,16 @@ def export_for_inference(
 
     ``dtypes`` に `promote_to_float32` の返り値を渡すと、保存時に元の dtype へ
     戻す。渡さなければ現在の dtype のまま書き出す。
+
+    ``frontend`` を渡すと `config.json` に ``japanese_frontend`` として残す。
+    **これが無いと checkpoint は自分がどの表記で学習したかを名乗れない。**
+    公開した `m4h-prosody` は `accent`（全文片仮名 + アクセント核の記号）で
+    学習したのに config が何も持たず、`synthesize_japanese.py` が素の漢字を
+    渡していた（学習時 `コンニチワ、キョ'ーワイーテ'ンキデスネ。` に対して
+    推論時 `こんにちは。今日はいい天気ですね。`）。M4a の実測では表記を
+    揃えるだけで -1.74pt、全文片仮名化で -4.40pt なので、**黙って食い違うと
+    公開した値が出ない**。`runtime.py` は未知の top-level キーを無視するので
+    推論側の互換は壊れない。
     """
     from safetensors.torch import save_file
 
@@ -170,7 +181,14 @@ def export_for_inference(
         raise FileNotFoundError(f"not a model directory: {source}")
     directory.mkdir(parents=True, exist_ok=True)
 
-    shutil.copy2(source / "config.json", directory / "config.json")
+    if frontend is None:
+        shutil.copy2(source / "config.json", directory / "config.json")
+    else:
+        config = json.loads((source / "config.json").read_text(encoding="utf-8"))
+        config["japanese_frontend"] = frontend
+        (directory / "config.json").write_text(
+            json.dumps(config, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8")
     for sub in ("tokenizer", "weights/audio_vae", "weights/speaker_encoder"):
         src = source / sub
         if src.is_dir():

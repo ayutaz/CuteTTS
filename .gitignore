@@ -11,3 +11,7 @@ dist/
 .pytest_cache/
 __pycache__/
 *.py[cod]
+
+# `ensure_minimum_duration`（R-026）が作る延長済みreferenceのキャッシュ。
+# **音声なのでコミットしない**（artifacts/ と同じ扱い）
+.ref-cache/

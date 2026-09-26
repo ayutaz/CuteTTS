@@ -554,7 +554,8 @@ def main() -> None:
                 # flow/stop loss では生成の崩壊を検知できない（R-015）。
                 export_for_inference(out_dir / f"inference-{step + 1}", model=model,
                                      source_model_dir=Path(args.model_dir),
-                                     dtypes=export_dtypes)
+                                     dtypes=export_dtypes,
+                                     frontend=args.frontend)
                 save_f0_conditioner(out_dir / f"inference-{step + 1}",
                                     f0_conditioner)
 
@@ -563,7 +564,8 @@ def main() -> None:
                         generator=generator)
     export_for_inference(out_dir / "inference", model=model,
                          source_model_dir=Path(args.model_dir),
-                         dtypes=export_dtypes)
+                         dtypes=export_dtypes,
+                         frontend=args.frontend)
     save_f0_conditioner(out_dir / "inference", f0_conditioner)
 
     artifacts.write_run_metadata(

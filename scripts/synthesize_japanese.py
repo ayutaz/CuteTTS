@@ -17,8 +17,19 @@
 **upstream の推論pathには触らない。** `cutetts` CLI と `api.py` はそのままで、
 ここは「日本語向けのtext前処理を掛けてから公開APIを呼ぶ」薄い層にすぎない。
 
-前処理はふたつ:
+前処理は **checkpoint が学習した表記に揃えること** が最優先で、その上に
+読みの補助が乗る:
 
+* **学習時の表記に揃える（M4a / `--frontend`）** — これを外すと他が全部無駄になる。
+  公開している checkpoint は `accent`（全文片仮名 + アクセント核の記号）で
+  学習しているので、`こんにちは。今日はいい天気ですね。` ではなく
+  `コンニチワ、キョ'ーワイーテ'ンキデスネ。` を渡さなければならない。
+  表記を揃えるだけで **-1.74pt**、全文片仮名化で **-4.40pt**（M4a-split）。
+  既定は `config.json` の `japanese_frontend`、無ければ `accent`。
+
+  **2026-09-26 まで、このスクリプトには `--frontend` が無かった。**
+  model card は `--frontend accent` と書いていたのに受け取る側が持っておらず、
+  手順どおりに使うと公開した読みCER 7.12% が出なかった。
 * **漢数字の読み展開（J2 / D-008）** — `千二百八十円` → `せんにひゃくはちじゅう円`。
   学習コーパスに複合漢数字は 0.32% しかなく桁の合成規則を学べないが、
   仮名なら既に読める。専用評価set 200文で **-11.80pt**
@@ -53,7 +64,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import soundfile as sf  # noqa: E402
 
 from cutetts import CuteTTS  # noqa: E402
-from cutetts.training.yomi import ReadingAssigner, apply_frontend  # noqa: E402
+from cutetts.training.yomi import (  # noqa: E402
+    DEFAULT_FRONTEND, FRONTEND_MODES, ReadingAssigner, frontend_from_model_dir,
+    frontend_text)
 from cutetts.training.reference import (  # noqa: E402
     DEFAULT_MINIMUM_SECONDS,
     duration_seconds,
@@ -75,10 +88,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-decode-length", type=int, default=400,
                         help="400 patch = 64.0秒。張り付くと停止に失敗している（R-021）")
+    parser.add_argument("--frontend", choices=FRONTEND_MODES,
+                        help="**学習時と同じ表記に揃える**（M4a）。既定は "
+                             "checkpoint の config.json の japanese_frontend で、"
+                             f"記録が無ければ {DEFAULT_FRONTEND}。"
+                             "学習と食い違うと公開した値は出ない")
     parser.add_argument("--raw-text", action="store_true",
-                        help="text前処理（J2の読み展開・J3の読み付与）を行わない")
+                        help="前処理を一切行わない（--frontend none と同じ）")
     parser.add_argument("--no-yomi", action="store_true",
-                        help="J3（語の読み付与）だけ無効にする。J2は残す")
+                        help="--frontend yomi のときだけ効く。J3（語の読み付与）を"
+                             "止めてJ2（漢数字）だけ残す")
     parser.add_argument("--min-reference-seconds", type=float,
                         default=DEFAULT_MINIMUM_SECONDS,
                         help="referenceがこれより短ければ繰り返して伸ばす（R-026）。"
@@ -94,6 +113,30 @@ def build_parser() -> argparse.ArgumentParser:
                              "学習側の F0 は latent を decode した波形から"
                              "取っているので、揃えないと有声判定が14%食い違う")
     return parser
+
+
+def resolve_frontend(args) -> str:
+    """使う frontend を決める。**明示 > checkpoint の記録 > 既定** の順。
+
+    checkpoint が `japanese_frontend` を名乗っていれば黙ってそれに従う。
+    名乗っていない古い checkpoint では既定を当てて **その旨を必ず印字する** —
+    黙って別の表記を渡すのが 2026-09-26 まで起きていた不具合そのもので、
+    公開した読みCER 7.12% が出ない状態を利用者から見えなくしていた。
+    """
+    if args.raw_text and args.frontend:
+        raise SystemExit("--raw-text と --frontend は同時に指定できない")
+    if args.frontend:
+        return args.frontend
+    if args.raw_text:
+        return "none"
+
+    recorded = frontend_from_model_dir(args.model_dir)
+    if recorded is not None:
+        return recorded
+    print(f"注意: {args.model_dir}/config.json に japanese_frontend が無い。"
+          f"既定の {DEFAULT_FRONTEND} を使う。この checkpoint を別の表記で"
+          f"学習した場合は --frontend で明示すること")
+    return DEFAULT_FRONTEND
 
 
 def build_prosody_kwargs(args, model) -> dict:
@@ -143,21 +186,24 @@ def build_prosody_kwargs(args, model) -> dict:
 def main() -> None:
     args = build_parser().parse_args()
 
-    spoken = args.text
-    if not args.raw_text:
-        # J3: byte-fallback を含む語を読みへ（R-027）。語彙はこの
-        # checkpoint の tokenizer から読む
-        assigner = None
-        if not args.no_yomi:
-            assigner = ReadingAssigner.from_model_dir(args.model_dir)
-        # **J3 → J2 の順で掛ける**（`yomi.apply_frontend`）。逆にすると
-        # J3 が J2 の仮名列を再解釈して漢数字を復活させる（`せんにひゃく八ジュウ`）
-        spoken = apply_frontend(spoken, assigner=assigner, expand_numerals=True)
-        if assigner is not None and assigner.replaced:
-            print("読み付与: " + "  ".join(
-                f"{surface}→{reading}" for surface, reading in assigner.replaced))
+    # **学習時と同じ表記に揃える**（M4a）。ここを外すと以降の工夫は全部無駄になる
+    frontend = resolve_frontend(args)
+
+    # J3（`--frontend yomi`）だけ tokenizer の語彙が要る。byte-fallback を含む
+    # 語を読みへ置き換える（R-027）
+    assigner = None
+    if frontend == "yomi" and not args.no_yomi:
+        assigner = ReadingAssigner.from_model_dir(args.model_dir)
+
+    # `frontend_text` が学習側と共通の入口。J3 → J2 の順序もこの中で固定されている
+    spoken = frontend_text(args.text, frontend, assigner=assigner)
+    if assigner is not None and assigner.replaced:
+        print("読み付与: " + "  ".join(
+            f"{surface}→{reading}" for surface, reading in assigner.replaced))
+    print(f"frontend={frontend}")
     if spoken != args.text:
-        print(f"入力: {args.text}\n  → {spoken}")
+        print(f"入力: {args.text}")
+        print(f"  → {spoken}")
 
     # **短いreferenceは伸ばす。** 同一話者・同一文で人間と聴き比べると、
     # 3〜4秒のreferenceでは声質と抑揚が崩れた（R-026）。学習時は平均9.61秒。

@@ -29,10 +29,13 @@ from __future__ import annotations
 import pytest
 
 from cutetts.training.yomi import (
+    DEFAULT_FRONTEND,
+    FRONTEND_MODES,
     MIN_SURFACE_LENGTH,
     SKIP_POS,
     USE_HIRAGANA,
     ReadingAssigner,
+    frontend_from_model_dir,
     reading_form,
     to_hiragana,
 )
@@ -220,3 +223,56 @@ def test_reading_form_is_hiragana():
 
 def test_reading_form_of_empty_text_is_empty():
     assert reading_form("") == ""
+
+
+# --- checkpoint が学習時の frontend を名乗る（2026-09-26） --------------------
+#
+# 公開した `m4h-prosody` は `accent` で学習したのに config.json が何も持たず、
+# `synthesize_japanese.py` が素の漢字を渡していた。model card に載せた
+# 読みCER 7.12% が手順どおりでは出ない状態だったので、記録する側と読む側の
+# 両方をテストで留める。
+
+
+def _write_config(tmp_path, payload):
+    import json
+
+    (tmp_path / "config.json").write_text(json.dumps(payload, ensure_ascii=False),
+                                          encoding="utf-8")
+    return tmp_path
+
+
+def test_frontend_from_model_dirは記録された表記を返す(tmp_path):
+    _write_config(tmp_path, {"model_type": "cutetts", "japanese_frontend": "accent"})
+    assert frontend_from_model_dir(tmp_path) == "accent"
+
+
+def test_frontend_from_model_dirは記録が無ければNoneを返す(tmp_path):
+    """**古い checkpoint は名乗れない。** 呼ぶ側が既定を当てる。"""
+    _write_config(tmp_path, {"model_type": "cutetts"})
+    assert frontend_from_model_dir(tmp_path) is None
+
+
+def test_frontend_from_model_dirはconfigが無ければNoneを返す(tmp_path):
+    assert frontend_from_model_dir(tmp_path) is None
+
+
+def test_frontend_from_model_dirは未知の表記を弾く(tmp_path):
+    """**黙って既定に落とさない。** 綴り違いを無視すると食い違いが再発する。"""
+    _write_config(tmp_path, {"japanese_frontend": "accent_v2"})
+    with pytest.raises(ValueError, match="japanese_frontend"):
+        frontend_from_model_dir(tmp_path)
+
+
+def test_frontend_from_model_dirは壊れたconfigでNoneを返す(tmp_path):
+    (tmp_path / "config.json").write_text("{ではない", encoding="utf-8")
+    assert frontend_from_model_dir(tmp_path) is None
+
+
+def test_既定の表記は公開checkpointと同じ():
+    """**公開しているのは `accent` で学習した checkpoint だけ。**
+
+    記録の無い checkpoint に当てる既定がこれと違うと、公開したモデルを
+    そのまま使った人が学習と別の表記を渡すことになる。
+    """
+    assert DEFAULT_FRONTEND == "accent"
+    assert DEFAULT_FRONTEND in FRONTEND_MODES
