@@ -209,7 +209,7 @@ uv run python scripts/synthesize_japanese.py \
 元の音声へ戻せます）だけを
 [`tts-dataset/cutetts-ja-latents`](https://huggingface.co/datasets/tts-dataset/cutetts-ja-latents)
 に置いてあります。**2 GB ほどダウンロードすれば学習を始められます**
-（利用には申請が必要です）。
+（**利用には申請が必要です。承認は手作業なので、少し待つことがあります**）。
 
 ```bash
 hf download tts-dataset/cutetts-ja-latents --repo-type dataset --local-dir data/s1v2
