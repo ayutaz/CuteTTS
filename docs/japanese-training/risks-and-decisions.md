@@ -737,6 +737,43 @@ CERだけを見れば「1e-4はダメ」で終わり、抑揚だけを見れば�
 T1で **lr も梃子でない**と分かったので、この結論の射程が一段広がった。
 残る未探索は batch size / flow_copies / condition_dropout / 学習対象（T2）。
 
+### R-063: **抑揚の測定が linux で import すらできなくなっていた**（CI、2026-09-26）
+
+**CI を入れた最初の実行で見つかった。** `uv sync --all-extras` の直後に
+`import pyworld` が落ちる。
+
+    File ".../pyworld/__init__.py", line 13, in <module>
+        import pkg_resources
+    ModuleNotFoundError: No module named 'pkg_resources'
+
+原因は3つの噛み合わせ:
+
+1. **`pyworld` 0.3.5 の sdist は `pkg_resources` を無条件に import する**
+   （`__init__.py` 13行目）。linux / macOS には wheel が無いので sdist を
+   ビルドし、ここに当たる
+2. **Windows の wheel だけは新しい `__init__.py`** を持っている
+   （`sys.version_info >= (3, 8)` なら `importlib.metadata` を使う）。
+   **同じ 0.3.5 なのに中身が違う**
+3. `pkg_resources` が同梱されているのは **setuptools 81 まで**。82 以降には無い
+   （実測: 81.0.0 あり / 82.0.0 なし / 83.0.0 なし / 84.0.0 なし）。
+   uv への移行（2026-09-21）で setuptools が 84.0.0 に上がっていた
+
+**手元（Windows）では通るので気づけなかった。** しかも
+`tests/training/test_prosody.py` は `pytest.importorskip("pyworld")` なので、
+**壊れていても失敗せず skip する**。テストは緑のまま、抑揚の測定だけが
+linux で動かない状態だった。
+
+**影響は CI だけではない。** 抑揚・アクセントの測定（M1 / M4c / M4f / M4h）は
+すべて vast.ai の linux 上で走らせる。次に instance を立てた時点で落ちていた。
+
+対策: `prosody` extra に `setuptools<82` を入れた。**marker を付けず
+全platformで揃えた** — 揃えないと同じ食い違いがまた「手元だけ通る」形で隠れる。
+`pyworld` 0.3.6 に上げる手は使えない（**Windows の wheel しか無く sdist が無いので
+linux に入らない**）。
+
+**教訓: `importorskip` は依存の破損を緑のまま通す。** 環境を変えたあとは
+「skip が増えていないか」を見る必要がある。
+
 ### R-062: **公開した使い方が、学習した表記を渡していなかった**（2026-09-26）
 
 **公開した読みCER 7.12% が、手順どおりに使っても出ない状態だった。**

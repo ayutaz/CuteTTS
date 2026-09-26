@@ -17,7 +17,9 @@ type: software
 authors:
   - name: ayutaz
 repository-code: "https://github.com/ayutaz/CuteTTS-jp"
-url: "https://huggingface.co/ayousanz/CuteTTS-jp"
+# 学習済みモデルの置き場は https://huggingface.co/ayousanz/CuteTTS-jp
+# （重みは CC BY-SA 4.0）。下の license はコード側のもの。
+url: "https://github.com/ayutaz/CuteTTS-jp"
 license: Apache-2.0
 date-released: "2026-09-22"
 keywords:

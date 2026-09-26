@@ -68,6 +68,15 @@ ja = [
 # `librosa`（pyin）は scipy + numba + llvmlite を引く（約200MB）。
 prosody = [
   "pyworld>=0.3,<1",
+  # **pyworld の sdist は `pkg_resources` を無条件に import する。**
+  # linux / macOS には wheel が無いので sdist をビルドし、ここに当たる。
+  # `pkg_resources` が同梱されているのは setuptools 81 までで、82 以降では
+  # `import pyworld` が ModuleNotFoundError で落ちる（2026-09-26、CIで発覚。R-063）。
+  # **Windows の wheel だけは新しい `__init__.py`**（`importlib.metadata` を使う）
+  # を持っているので、手元では気づけなかった。
+  # **marker を付けず全platformで揃える** — 揃えないと同じ食い違いが
+  # また「手元だけ通る」形で隠れる。
+  "setuptools<82",
 ]
 # CER評価（`evaluate_japanese_cer.py`）。ASRに kotoba-whisper を使う。
 # **`accelerate` が無いと `transformers` のモデル読み込みが
