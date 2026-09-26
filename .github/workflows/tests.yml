@@ -20,15 +20,17 @@ jobs:
   tests:
     runs-on: ubuntu-latest
     # linux では torch が cu121 版で解決されるので、キャッシュが無いと
-    # 約 2.2 GB 落ちる（nvidia-* だけで約 2.05 GB）。テスト自体は22秒なので
-    # ほとんどがインストール時間になる。
+    # 約 2.2 GB 落ちる（nvidia-* だけで約 2.05 GB）。
+    # **実測ではそれでも job 全体が1分弱で終わる**（キャッシュ無し47秒 /
+    # 有り65秒。2026-09-26）。runner から配布元までが速いので、
+    # **サイズは問題にならなかった。**
     #
-    # **CPU版のwheelに差し替えていない。** `UV_INDEX` で index のURLを
-    # 差し替えると nvidia-* は 12個 → 0個 になるが、そのとき pyproject の
+    # したがって **CPU版のwheelには差し替えない。** `UV_INDEX` で index のURLを
+    # 差し替えれば nvidia-* は 12個 → 0個 になるが、そのとき pyproject の
     # `explicit = true` が失われ、**torch 以外の依存まで pytorch のミラーから
     # 引かれる**（jinja2 / markupsafe / setuptools で実際に起きた）。
-    # これは pyproject でわざわざ `explicit` を付けて避けた挙動なので、
-    # CI だけ別の解決結果にするのはやめて、uv のキャッシュで速くする。
+    # `explicit` はそれを避けるために付けたものなので、得るもの（数十秒）より
+    # 失うもの（利用者と違う解決結果）が大きい。
     timeout-minutes: 30
 
     steps:
