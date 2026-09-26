@@ -17,7 +17,7 @@
 set -euo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/ayutaz/CuteTTS-jp.git}"
-BRANCH="${BRANCH:-feat/japanese-training}"
+BRANCH="${BRANCH:-main}"
 WORKDIR="${WORKDIR:-/workspace/CuteTTS}"
 
 echo "=== 1/5 システム依存 ==="

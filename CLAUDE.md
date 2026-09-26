@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 upstreamのコードは **推論専用** であり、学習コード（trainer / dataset / loss / packing）は一切含まれない。
 
 CuteTTS-jp の目的は `docs/japanese-training/` にある通り、公開base checkpoint `OPPOer/CuteTTS` からの
-**日本語継続学習** を段階的に進めること。作業ブランチは `feat/japanese-training`。
+**日本語継続学習** を段階的に進めること。作業ブランチは `main`。
 
 `src/cutetts/` 配下はupstream由来のinference実装で、`modeling/model.py` と `modeling/processor.py` は
 明示的にinference-onlyと宣言されている（公開modelの構成以外はコンストラクタで `ValueError` を投げる）。
