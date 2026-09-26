@@ -1,0 +1,64 @@
+# 日本語継続学習のコードが壊れていないことだけを確認する。
+#
+# **実checkpointを要するテスト（slow）と CUDA を要するテスト（gpu）は走らせない。**
+# 前者は約1.2 GBのweightが要り、後者はGPUが要る。どちらも vast.ai 側で行う
+# （D-023 / D-024）。残る 600 件あまりはすべてCPUで、22秒で終わる。
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# 同じブランチへ連続でpushしたら古い実行は止める
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    # linux では torch が cu121 版で解決されるので、キャッシュが無いと
+    # 約 2.2 GB 落ちる（nvidia-* だけで約 2.05 GB）。テスト自体は22秒なので
+    # ほとんどがインストール時間になる。
+    #
+    # **CPU版のwheelに差し替えていない。** `UV_INDEX` で index のURLを
+    # 差し替えると nvidia-* は 12個 → 0個 になるが、そのとき pyproject の
+    # `explicit = true` が失われ、**torch 以外の依存まで pytorch のミラーから
+    # 引かれる**（jinja2 / markupsafe / setuptools で実際に起きた）。
+    # これは pyproject でわざわざ `explicit` を付けて避けた挙動なので、
+    # CI だけ別の解決結果にするのはやめて、uv のキャッシュで速くする。
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # setup-uv は v8 以降 major の移動tagを打っていないので版を固定する
+      - name: uv を入れる
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          version: "0.11.8"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      # pyproject を触って uv.lock を更新し忘れると、手元と CI で別の
+      # 依存を使うことになる。**入れる前に食い違いを落とす。**
+      - name: pyproject と uv.lock が食い違っていないか
+        run: uv lock --check
+
+      # `--frozen` で uv.lock のまま入れる。**利用者が実行する
+      # `uv sync --all-extras` と同じ解決結果をテストする**のが狙い。
+      # pyworld は sdist しか無いのでここでビルドされる（runner の gcc を使う）。
+      - name: 依存を入れる
+        run: uv sync --all-extras --frozen
+
+      # 入っただけでは import できるとは限らない。cu121 版の torch を
+      # GPU の無い runner で読めるかはここで落ちる
+      - name: torch と日本語の読みが読めるか
+        run: |
+          uv run python -c "import torch, torchaudio; print('torch', torch.__version__, '/ torchaudio', torchaudio.__version__)"
+          uv run python -c "import pyopenjtalk, pyworld; print('pyopenjtalk / pyworld OK')"
+
+      - name: テスト
+        run: uv run python -m pytest tests -m "not gpu and not slow" -q

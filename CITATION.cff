@@ -1,0 +1,53 @@
+# GitHub がこのファイルを読んで「Cite this repository」を出す。
+#
+# 著者は表記名だけにしてある（メールアドレスは載せない）。
+# 参照している CuteTTS の論文は、**著者名の一覧を確認できていない**ので
+# LICENSE / NOTICE に書かれている著作権者を所属として記載している。
+cff-version: 1.2.0
+message: "このリポジトリを引用する場合は、以下の情報を使ってください。"
+title: CuteTTS-jp
+abstract: >-
+  公開されている学習済みモデル OPPOer/CuteTTS を出発点に、日本語音声
+  325.9 時間で継続学習した記録。上流のコードは推論専用で学習コードを
+  含まないため、学習・評価・日本語テキスト前処理・F0 による韻律条件づけを
+  新規に実装した。読み間違いの割合は 30.94% から 7.12% になった（同じ手順で
+  測った人間の録音は 5.59%）。測った値と、そこから下した判断をすべて記録して
+  いる。コードは Apache License 2.0、学習済みモデルの重みは CC BY-SA 4.0。
+type: software
+authors:
+  - name: ayutaz
+repository-code: "https://github.com/ayutaz/CuteTTS-jp"
+url: "https://huggingface.co/ayousanz/CuteTTS-jp"
+license: Apache-2.0
+date-released: "2026-09-22"
+keywords:
+  - text-to-speech
+  - speech-synthesis
+  - japanese
+  - voice-cloning
+  - continual-learning
+  - prosody
+references:
+  - type: software
+    title: CuteTTS
+    abstract: >-
+      継続学習の出発点にした公開モデルと推論実装。
+    authors:
+      - name: OPPO
+      - name: Fudan University
+    repository-code: "https://github.com/OPPO-Mente-Lab/CuteTTS"
+    url: "https://huggingface.co/OPPOer/CuteTTS"
+    license: Apache-2.0
+    notes: >-
+      著者名は LICENSE / NOTICE の著作権表示（Copyright 2026 OPPO and Fudan
+      University）に合わせている。論文の著者一覧は未確認。
+  - type: article
+    title: >-
+      CuteTTS: Efficient and High-Quality Speech Synthesis via Autoregressive
+      Modeling of Continuous Latents
+    authors:
+      - name: OPPO
+      - name: Fudan University
+    url: "https://arxiv.org/abs/2608.08638"
+    notes: >-
+      arXiv:2608.08638。著者一覧を確認できていないため、所属のみ記載している。

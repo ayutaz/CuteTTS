@@ -2,10 +2,12 @@
 
 ## <sup><sup><sup><img src="assets/logo.png" alt="CuteTTS-jp logo" height="72" align="middle"></sup></sup></sup> CuteTTS-jp
 
-<a href="https://huggingface.co/OPPOer/CuteTTS"><img src="https://img.shields.io/badge/%F0%9F%A4%97%20HF%20Model-CuteTTS-yellow" alt="CuteTTS Hugging Face model"></a>
-<a href="https://arxiv.org/abs/2608.08638"><img src="https://img.shields.io/badge/Paper-CuteTTS-red" alt="paper"></a>
-<a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue" alt="Apache 2.0"></a>
 <a href="https://huggingface.co/ayousanz/CuteTTS-jp"><img src="https://img.shields.io/badge/%F0%9F%A4%97%20Model-CuteTTS--jp-brightgreen" alt="CuteTTS-jp model"></a>
+<a href="https://github.com/ayutaz/CuteTTS-jp/actions/workflows/tests.yml"><img src="https://github.com/ayutaz/CuteTTS-jp/actions/workflows/tests.yml/badge.svg" alt="tests"></a>
+<a href="LICENSE"><img src="https://img.shields.io/badge/%E3%82%B3%E3%83%BC%E3%83%89-Apache%202.0-blue" alt="コードは Apache License 2.0"></a>
+<a href="https://creativecommons.org/licenses/by-sa/4.0/deed.ja"><img src="https://img.shields.io/badge/%E5%AD%A6%E7%BF%92%E6%B8%88%E3%81%BF%E3%83%A2%E3%83%87%E3%83%AB-CC%20BY--SA%204.0-lightgrey" alt="学習済みモデルは CC BY-SA 4.0"></a>
+<a href="https://huggingface.co/OPPOer/CuteTTS"><img src="https://img.shields.io/badge/%F0%9F%A4%97%20%E5%87%BA%E7%99%BA%E7%82%B9-CuteTTS-yellow" alt="出発点にした CuteTTS"></a>
+<a href="https://arxiv.org/abs/2608.08638"><img src="https://img.shields.io/badge/Paper-CuteTTS-red" alt="paper"></a>
 
 **CuteTTS の日本語継続学習。**
 [OPPO-Mente-Lab/CuteTTS](https://github.com/OPPO-Mente-Lab/CuteTTS) の fork で、
@@ -32,6 +34,7 @@ CuteTTS-jp が足したのは `src/cutetts/training/`、`scripts/`、`tests/` �
 | [CuteTTS-jp で分かったこと](#cutetts-jp-で分かったこと) | 学習と測定でつまずいた点 |
 | [ドキュメント](#ドキュメント) | 詳しい記録の置き場所 |
 | [データとライセンス](#データとライセンス上の注意) | **公開してはいけないもの** |
+| [引用](#引用) | CITATION.cff を置いてあります |
 
 ---
 
@@ -78,6 +81,10 @@ CuteTTS-jp が足したのは `src/cutetts/training/`、`scripts/`、`tests/` �
 同じように、**声の高さの動きの +0.367 も測定側の限界**です。音声を一度圧縮して
 戻すだけでこの値まで落ちるため、それ以上は測れません。
 
+上の表は比較の基準にしてきたモデル（`m4a-accent`）の値です。
+**公開しているモデル（`m4h-prosody`、抑揚のコピーに対応）は読み間違い 7.12%** で、
+この差はばらつきの範囲内です（どちらを使っても読みの精度は変わりません）。
+
 いまの値は、325.9 時間のデータで 30,000 回更新し、読み方を片仮名で
 与えて生成したものです。読み間違いは **23.4 ポイント減り**、
 測定側の誤差 5.59% を差し引くと、**モデル自身の誤りは 25.4 → 2.0 ポイントまで
@@ -106,6 +113,10 @@ uv sync --all-extras
 uv run python -m pytest tests/training -q     # テスト
 uv run cutetts --help                         # 元の CuteTTS のコマンド
 ```
+
+テストは GitHub Actions でも走ります（`main` への push と Pull Request）。
+**実際のモデルの重みを要するものと GPU を要するものは動かしません**。
+残る 600 件あまりはすべて CPU で完結し、22 秒で終わります。
 
 | | |
 |---|---|
@@ -339,6 +350,16 @@ CuteTTS-jp で実際に誤った結論を出したものです。
 - 公開している中間表現は音声へ復元できるので、**音声と同じ扱い**にしています
 - 学習済みモデルは公開しました（[`ayousanz/CuteTTS-jp`](https://huggingface.co/ayousanz/CuteTTS-jp)）。
   **重みには話者IDも作品名も含まれていません**
+
+## 引用
+
+[CITATION.cff](CITATION.cff) を置いてあるので、GitHub の右側の
+**「Cite this repository」** から APA と BibTeX の形で取り出せます。
+
+出発点にした CuteTTS（[arXiv:2608.08638](https://arxiv.org/abs/2608.08638)）も
+併せて挙げてください。**その論文の著者名の一覧は確認できていない**ので、
+CITATION.cff には LICENSE に書かれている著作権者（OPPO and Fudan University）を
+所属として記載しています。
 
 ## Acknowledgements
 
